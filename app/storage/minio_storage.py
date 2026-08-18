@@ -20,10 +20,10 @@ class MinIOStorageService(StorageService):
         client: Minio | None = None,
     ) -> None:
         """
-        Initialize MinIO storage client.
+        Initialize MinIO client.
 
         Args:
-            client: Optional MinIO client for testing.
+            client: Optional client for testing.
         """
         self._client = client or Minio(
             settings.MINIO_ENDPOINT,
@@ -39,9 +39,7 @@ class MinIOStorageService(StorageService):
         self._ensure_bucket()
 
     def _ensure_bucket(self) -> None:
-        """
-        Ensure the configured bucket exists.
-        """
+        """Create bucket if it does not exist."""
         if not self._client.bucket_exists(
             self._bucket_name
         ):
@@ -57,14 +55,6 @@ class MinIOStorageService(StorageService):
     ) -> str:
         """
         Store an object in MinIO.
-
-        Args:
-            file_content: Binary file content.
-            object_key: Object key.
-            content_type: MIME type.
-
-        Returns:
-            Stored object key.
         """
         self._client.put_object(
             self._bucket_name,
@@ -75,3 +65,28 @@ class MinIOStorageService(StorageService):
         )
 
         return object_key
+
+    def get(
+        self,
+        object_key: str,
+    ) -> bytes:
+        """
+        Retrieve an object from MinIO.
+
+        Args:
+            object_key: Object storage key.
+
+        Returns:
+            Object bytes.
+        """
+        response = self._client.get_object(
+            self._bucket_name,
+            object_key,
+        )
+
+        try:
+            return response.read()
+
+        finally:
+            response.close()
+            response.release_conn()

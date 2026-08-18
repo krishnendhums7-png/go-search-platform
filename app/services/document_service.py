@@ -1,8 +1,16 @@
 """
 Government Order document intake service.
+
+This service handles:
+    - PDF validation
+    - PDF storage
+    - Document metadata
+    - PDF classification
+    - Scanned PDF preprocessing
+
+No LLM or text generation is used here.
 """
 
-from pathlib import PurePosixPath
 from uuid import UUID
 from uuid import uuid4
 
@@ -10,10 +18,30 @@ from fastapi import UploadFile
 
 from app.core.exceptions import GOSearchException
 from app.models.document import Document
+from app.models.pdf_processing import (
+    PDFClassificationResult,
+)
+from app.models.pdf_processing import (
+    PreprocessedPage,
+)
+from app.models.pdf_processing import (
+    PreprocessingResult,
+)
+from app.models.pdf_processing import (
+    ProcessingPath,
+)
 from app.repositories.document_repository import (
     document_repository,
 )
-from app.storage.mock_storage import MockStorageService
+from app.services.image_preprocessor import (
+    image_preprocessor,
+)
+from app.services.pdf_classifier import (
+    pdf_classifier,
+)
+from app.storage.mock_storage import (
+    MockStorageService,
+)
 
 
 class InvalidDocumentException(GOSearchException):
@@ -24,7 +52,8 @@ class InvalidDocumentException(GOSearchException):
 
 class DocumentService:
     """
-    Handles raw Government Order PDF intake.
+    Handles Government Order document intake
+    and Module 3 PDF processing.
     """
 
     MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -36,12 +65,17 @@ class DocumentService:
         storage_service: MockStorageService,
     ) -> None:
         """
-        Initialize document service.
+        Initialize the document service.
 
         Args:
-            storage_service: Object storage implementation.
+            storage_service:
+                Object storage implementation.
         """
         self._storage_service = storage_service
+
+    # =========================================================
+    # MODULE 2 — PDF UPLOAD
+    # =========================================================
 
     async def upload(
         self,
@@ -51,74 +85,119 @@ class DocumentService:
         Validate and store a Government Order PDF.
 
         Args:
-            file: Uploaded PDF.
+            file:
+                Uploaded PDF file.
 
         Returns:
-            Stored document metadata.
+            Stored Document metadata.
 
         Raises:
             InvalidDocumentException:
                 If the uploaded file is invalid.
         """
+
+        # -----------------------------------------------------
+        # 1. Validate filename
+        # -----------------------------------------------------
+
         self._validate_filename(
             file.filename
         )
+
+        # -----------------------------------------------------
+        # 2. Validate MIME type
+        # -----------------------------------------------------
 
         self._validate_content_type(
             file.content_type
         )
 
+        # -----------------------------------------------------
+        # 3. Read uploaded file
+        # -----------------------------------------------------
+
         content = await file.read()
+
+        # -----------------------------------------------------
+        # 4. Validate file size
+        # -----------------------------------------------------
 
         self._validate_file_size(
             len(content)
         )
 
+        # -----------------------------------------------------
+        # 5. Validate actual PDF signature
+        # -----------------------------------------------------
+
         self._validate_pdf_signature(
             content
         )
 
+        # -----------------------------------------------------
+        # 6. Generate unique document UUID
+        # -----------------------------------------------------
+
         document_id = uuid4()
 
-        object_key = str(
-            PurePosixPath(
-                "original",
-                f"{document_id}.pdf",
-            )
+        # -----------------------------------------------------
+        # 7. Create object-storage key
+        # -----------------------------------------------------
+
+        object_key = (
+            f"original/{document_id}.pdf"
         )
+
+        # -----------------------------------------------------
+        # 8. Store original PDF
+        # -----------------------------------------------------
 
         self._storage_service.save(
             file_content=content,
             object_key=object_key,
-            content_type=file.content_type,
+            content_type=self.ALLOWED_CONTENT_TYPE,
         )
+
+        # -----------------------------------------------------
+        # 9. Create document metadata
+        # -----------------------------------------------------
 
         document = Document(
             id=document_id,
             filename=file.filename,
             object_key=object_key,
-            content_type=file.content_type,
+            content_type=self.ALLOWED_CONTENT_TYPE,
             file_size=len(content),
         )
+
+        # -----------------------------------------------------
+        # 10. Save metadata and RETURN it
+        # -----------------------------------------------------
 
         return document_repository.save(
             document
         )
+
+    # =========================================================
+    # MODULE 2 — VALIDATION METHODS
+    # =========================================================
 
     @staticmethod
     def _validate_filename(
         filename: str | None,
     ) -> None:
         """
-        Validate the original filename.
+        Validate uploaded filename.
 
         Args:
-            filename: Uploaded filename.
+            filename:
+                Original filename.
 
         Raises:
             InvalidDocumentException:
-                If filename is missing or not a PDF.
+                If filename is missing or not PDF.
         """
+
         if not filename:
             raise InvalidDocumentException(
                 "Filename is required."
@@ -131,21 +210,27 @@ class DocumentService:
                 "Only PDF files are allowed."
             )
 
-    @staticmethod
+    @classmethod
     def _validate_content_type(
+        cls,
         content_type: str | None,
     ) -> None:
         """
         Validate uploaded MIME type.
 
         Args:
-            content_type: MIME type.
+            content_type:
+                MIME type provided by the client.
 
         Raises:
             InvalidDocumentException:
-                If MIME type is not PDF.
+                If MIME type is not application/pdf.
         """
-        if content_type != "application/pdf":
+
+        if (
+            content_type
+            != cls.ALLOWED_CONTENT_TYPE
+        ):
             raise InvalidDocumentException(
                 "Only application/pdf files are allowed."
             )
@@ -156,15 +241,17 @@ class DocumentService:
         file_size: int,
     ) -> None:
         """
-        Validate file size.
+        Validate uploaded file size.
 
         Args:
-            file_size: Size in bytes.
+            file_size:
+                Size of uploaded file in bytes.
 
         Raises:
             InvalidDocumentException:
-                If file is empty or exceeds the limit.
+                If file is empty or too large.
         """
+
         if file_size == 0:
             raise InvalidDocumentException(
                 "Uploaded file is empty."
@@ -180,21 +267,31 @@ class DocumentService:
         content: bytes,
     ) -> None:
         """
-        Validate the PDF magic signature.
+        Validate the actual PDF file signature.
+
+        PDF files normally begin with:
+
+            %PDF-
 
         Args:
-            content: Uploaded file bytes.
+            content:
+                Uploaded file bytes.
 
         Raises:
             InvalidDocumentException:
-                If the file does not have a PDF signature.
+                If the file is not a real PDF.
         """
+
         if not content.startswith(
             b"%PDF-"
         ):
             raise InvalidDocumentException(
                 "Uploaded file is not a valid PDF."
             )
+
+    # =========================================================
+    # DOCUMENT RETRIEVAL
+    # =========================================================
 
     @staticmethod
     def get_document(
@@ -204,15 +301,184 @@ class DocumentService:
         Retrieve document metadata.
 
         Args:
-            document_id: Document UUID.
+            document_id:
+                Document UUID.
 
         Returns:
             Document if found, otherwise None.
         """
+
         return document_repository.find_by_id(
             document_id
         )
 
+    # =========================================================
+    # MODULE 3 — PDF CLASSIFICATION
+    # =========================================================
+
+    def classify(
+        self,
+        document_id: UUID,
+    ) -> PDFClassificationResult:
+        """
+        Classify a stored Government Order PDF.
+
+        The PDF is retrieved through the storage
+        abstraction and passed to the PyMuPDF-based
+        classifier.
+
+        Args:
+            document_id:
+                Document UUID.
+
+        Returns:
+            PDF classification result.
+
+        Raises:
+            InvalidDocumentException:
+                If document does not exist.
+        """
+
+        document = self.get_document(
+            document_id
+        )
+
+        if document is None:
+            raise InvalidDocumentException(
+                "Document not found."
+            )
+
+        # Retrieve original PDF from storage.
+        pdf_content = (
+            self._storage_service.get(
+                document.object_key
+            )
+        )
+
+        # Classify using Module 3 classifier.
+        return pdf_classifier.classify(
+            document_id=str(
+                document.id
+            ),
+            filename=document.filename,
+            pdf_content=pdf_content,
+        )
+
+    # =========================================================
+    # MODULE 3 — SCANNED PDF PREPROCESSING
+    # =========================================================
+
+    def preprocess(
+        self,
+        document_id: UUID,
+    ) -> PreprocessingResult:
+        """
+        Preprocess a scanned Government Order PDF.
+
+        Processing is performed only when the classifier
+        determines that image preprocessing is required.
+
+        Args:
+            document_id:
+                Document UUID.
+
+        Returns:
+            Preprocessing result containing processed
+            page object keys.
+
+        Raises:
+            InvalidDocumentException:
+                If document does not exist or preprocessing
+                is not required.
+        """
+
+        document = self.get_document(
+            document_id
+        )
+
+        if document is None:
+            raise InvalidDocumentException(
+                "Document not found."
+            )
+
+        # Retrieve original PDF.
+        pdf_content = (
+            self._storage_service.get(
+                document.object_key
+            )
+        )
+
+        # Classify the PDF before preprocessing.
+        classification = (
+            pdf_classifier.classify(
+                document_id=str(
+                    document.id
+                ),
+                filename=document.filename,
+                pdf_content=pdf_content,
+            )
+        )
+
+        # Native PDFs should go to text extraction,
+        # not image preprocessing.
+        if (
+            classification.processing_path
+            != ProcessingPath.IMAGE_PREPROCESSING
+        ):
+            raise InvalidDocumentException(
+                "Preprocessing is only required "
+                "for scanned PDFs."
+            )
+
+        # Run OpenCV preprocessing.
+        processed_pages = (
+            image_preprocessor.process_pdf(
+                pdf_content
+            )
+        )
+
+        page_objects: list[
+            PreprocessedPage
+        ] = []
+
+        # Store every processed page.
+        for index, page_content in enumerate(
+            processed_pages,
+            start=1,
+        ):
+            object_key = (
+                f"processed/"
+                f"{document.id}/"
+                f"page_{index:03d}.png"
+            )
+
+            self._storage_service.save(
+                file_content=page_content,
+                object_key=object_key,
+                content_type="image/png",
+            )
+
+            page_objects.append(
+                PreprocessedPage(
+                    page_number=index,
+                    object_key=object_key,
+                )
+            )
+
+        return PreprocessingResult(
+            document_id=str(
+                document.id
+            ),
+            page_count=len(
+                processed_pages
+            ),
+            processed_pages=page_objects,
+        )
+
+
+# =============================================================
+# SERVICE INSTANCE
+# =============================================================
 
 mock_storage = MockStorageService()
 

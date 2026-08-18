@@ -1,5 +1,5 @@
 """
-In-memory object storage used for development and unit testing.
+In-memory object storage used for development and testing.
 """
 
 from app.storage.storage_service import StorageService
@@ -9,14 +9,11 @@ class MockStorageService(StorageService):
     """
     Temporary object-storage implementation.
 
-    This class allows Module 2 to be developed and tested
-    without requiring a running MinIO server.
+    Used while MinIO is not available locally.
     """
 
     def __init__(self) -> None:
-        """
-        Initialize empty mock storage.
-        """
+        """Initialize empty storage."""
         self._objects: dict[str, bytes] = {}
 
     def save(
@@ -29,8 +26,8 @@ class MockStorageService(StorageService):
         Store an object in memory.
 
         Args:
-            file_content: Binary file content.
-            object_key: Object storage key.
+            file_content: Binary content.
+            object_key: Storage key.
             content_type: MIME type.
 
         Returns:
@@ -43,14 +40,22 @@ class MockStorageService(StorageService):
     def get(
         self,
         object_key: str,
-    ) -> bytes | None:
+    ) -> bytes:
         """
-        Retrieve an object from mock storage.
+        Retrieve an object.
 
         Args:
-            object_key: Object storage key.
+            object_key: Storage key.
 
         Returns:
-            Stored bytes or None.
+            Stored bytes.
+
+        Raises:
+            KeyError: If object does not exist.
         """
-        return self._objects.get(object_key)
+        if object_key not in self._objects:
+            raise KeyError(
+                f"Object not found: {object_key}"
+            )
+
+        return self._objects[object_key]
