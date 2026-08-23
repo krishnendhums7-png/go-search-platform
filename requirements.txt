@@ -19,3 +19,5 @@ minio==7.2.16
 PyMuPDF==1.26.4
 opencv-python==4.12.0.88
 numpy==2.2.6
+pytesseract==0.3.13
+Pillow==11.3.0

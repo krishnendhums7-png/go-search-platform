@@ -10,20 +10,12 @@ from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi import status
 
+from app.models.pdf_processing import PDFClassificationResult
+from app.models.pdf_processing import PreprocessingResult
+from app.models.text_extraction import TextExtractionResult
 from app.schemas.document import DocumentUploadResponse
-from app.services.document_service import (
-    InvalidDocumentException,
-)
-from app.services.document_service import (
-    document_service,
-)
-
-from app.models.pdf_processing import (
-    PDFClassificationResult,
-)
-from app.models.pdf_processing import (
-    PreprocessingResult,
-)
+from app.services.document_service import InvalidDocumentException
+from app.services.document_service import document_service
 
 router = APIRouter(
     prefix="/documents",
@@ -39,15 +31,8 @@ router = APIRouter(
 async def upload_document(
     file: UploadFile = File(...),
 ) -> DocumentUploadResponse:
-    """
-    Receive and store a Government Order PDF.
+    """Receive and store a Government Order PDF."""
 
-    Args:
-        file: Uploaded PDF.
-
-    Returns:
-        Document tracking information.
-    """
     try:
         document = await document_service.upload(
             file
@@ -72,15 +57,8 @@ async def upload_document(
 def get_document(
     document_id: UUID,
 ) -> dict:
-    """
-    Retrieve document metadata.
+    """Retrieve document metadata."""
 
-    Args:
-        document_id: Document tracking UUID.
-
-    Returns:
-        Document metadata.
-    """
     document = document_service.get_document(
         document_id
     )
@@ -95,6 +73,7 @@ def get_document(
         mode="json"
     )
 
+
 @router.post(
     "/{document_id}/classify",
     response_model=PDFClassificationResult,
@@ -102,9 +81,8 @@ def get_document(
 def classify_document(
     document_id: UUID,
 ) -> PDFClassificationResult:
-    """
-    Classify a stored Government Order PDF.
-    """
+    """Classify a stored Government Order PDF."""
+
     try:
         return document_service.classify(
             document_id
@@ -116,6 +94,7 @@ def classify_document(
             detail=str(exc),
         ) from exc
 
+
 @router.post(
     "/{document_id}/preprocess",
     response_model=PreprocessingResult,
@@ -123,9 +102,8 @@ def classify_document(
 def preprocess_document(
     document_id: UUID,
 ) -> PreprocessingResult:
-    """
-    Preprocess a scanned Government Order PDF.
-    """
+    """Preprocess a scanned Government Order PDF."""
+
     try:
         return document_service.preprocess(
             document_id
@@ -134,5 +112,26 @@ def preprocess_document(
     except InvalidDocumentException as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/{document_id}/extract-text",
+    response_model=TextExtractionResult,
+)
+def extract_document_text(
+    document_id: UUID,
+) -> TextExtractionResult:
+    """Extract raw text from a Government Order."""
+
+    try:
+        return document_service.extract_text(
+            document_id
+        )
+
+    except InvalidDocumentException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc

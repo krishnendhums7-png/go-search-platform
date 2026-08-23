@@ -42,7 +42,9 @@ from app.services.pdf_classifier import (
 from app.storage.mock_storage import (
     MockStorageService,
 )
-
+from app.models.text_extraction import TextExtractionResult
+from app.services.text_extractor import TextExtractor
+from app.storage.storage_service import StorageService
 
 class InvalidDocumentException(GOSearchException):
     """
@@ -62,7 +64,7 @@ class DocumentService:
 
     def __init__(
         self,
-        storage_service: MockStorageService,
+        storage_service: StorageService,
     ) -> None:
         """
         Initialize the document service.
@@ -72,6 +74,10 @@ class DocumentService:
                 Object storage implementation.
         """
         self._storage_service = storage_service
+
+        self._text_extractor = TextExtractor(
+            storage_service
+        )
 
     # =========================================================
     # MODULE 2 — PDF UPLOAD
@@ -474,7 +480,28 @@ class DocumentService:
             ),
             processed_pages=page_objects,
         )
+    def extract_text(
+        self,
+        document_id: UUID,
+    ) -> TextExtractionResult:
+        """
+        Extract raw text from a stored Government Order.
+        """
 
+        document = self.get_document(
+            document_id
+        )
+
+        if document is None:
+            raise InvalidDocumentException(
+                "Document not found."
+            )
+
+        return self._text_extractor.extract(
+            document_id=str(document.id),
+            filename=document.filename,
+            object_key=document.object_key,
+        )
 
 # =============================================================
 # SERVICE INSTANCE
