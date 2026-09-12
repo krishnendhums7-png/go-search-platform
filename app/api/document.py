@@ -16,6 +16,9 @@ from app.models.text_extraction import TextExtractionResult
 from app.schemas.document import DocumentUploadResponse
 from app.services.document_service import InvalidDocumentException
 from app.services.document_service import document_service
+from app.models.identifier_extraction import (
+    IdentifierExtractionResult,
+)
 
 router = APIRouter(
     prefix="/documents",
@@ -127,6 +130,28 @@ def extract_document_text(
 
     try:
         return document_service.extract_text(
+            document_id
+        )
+
+    except InvalidDocumentException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+@router.post(
+    "/{document_id}/extract-identifiers",
+    response_model=IdentifierExtractionResult,
+)
+def extract_document_identifiers(
+    document_id: UUID,
+) -> IdentifierExtractionResult:
+    """
+    Extract GO identifiers and relationship signals.
+    """
+
+    try:
+        return document_service.extract_identifiers(
             document_id
         )
 

@@ -45,6 +45,15 @@ from app.storage.mock_storage import (
 from app.models.text_extraction import TextExtractionResult
 from app.services.text_extractor import TextExtractor
 from app.storage.storage_service import StorageService
+from app.models.identifier_extraction import (
+    IdentifierExtractionResult,
+)
+from app.services.identifier_extractor import (
+    identifier_extractor,
+)
+from app.services.text_extractor import (
+    TextExtractor,
+)
 
 class InvalidDocumentException(GOSearchException):
     """
@@ -501,6 +510,31 @@ class DocumentService:
             document_id=str(document.id),
             filename=document.filename,
             object_key=document.object_key,
+        )
+
+    def extract_identifiers(
+        self,
+        document_id: UUID,
+    ) -> IdentifierExtractionResult:
+        """
+        Extract GO identifiers and relationship signals.
+        """
+
+        document = self.get_document(
+            document_id
+        )
+
+        if document is None:
+            raise InvalidDocumentException(
+                "Document not found."
+            )
+
+        text_result = self.extract_text(
+            document_id=document.id
+        )
+
+        return identifier_extractor.extract(
+            text_result
         )
 
 # =============================================================
