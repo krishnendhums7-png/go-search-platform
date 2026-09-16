@@ -22,3 +22,6 @@ numpy==2.2.6
 pytesseract==0.3.13
 Pillow==11.3.0
 rapidfuzz
+sentence-transformers
+qdrant-client
+numpy
