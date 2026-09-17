@@ -35,6 +35,16 @@ class Settings(BaseSettings):
 
     MINIO_SECURE: bool = False
 
+    POSTGRES_USER: str = "go_user"
+
+    POSTGRES_PASSWORD: str = "go_password"
+
+    POSTGRES_HOST: str = "localhost"
+
+    POSTGRES_PORT: int = 5432
+
+    POSTGRES_DB: str = "kerala_go"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

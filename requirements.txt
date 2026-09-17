@@ -25,3 +25,5 @@ rapidfuzz
 sentence-transformers
 qdrant-client
 numpy
+SQLAlchemy
+psycopg[binary]
