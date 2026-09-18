@@ -220,3 +220,106 @@ def test_extract_malayalam_relationship() -> None:
         RelationshipType.AMENDS
         in relationship_types
     )
+
+def test_extract_go_reference() -> None:
+    """Numbered Government Order reference should be extracted."""
+
+    extractor = IdentifierExtractor()
+
+    text_result = create_text_result(
+        "1 G.O.(Rt) No. 114/2025/ITD"
+    )
+
+    result = extractor.extract(text_result)
+
+    assert len(result.references) == 1
+    assert result.references[0].ordinal == 1
+    assert (
+        result.references[0].go_number
+        == "G.O.(Rt) No. 114/2025/ITD"
+    )
+
+
+def test_extract_multiple_go_references() -> None:
+    """Multiple numbered GO references should be extracted."""
+
+    extractor = IdentifierExtractor()
+
+    text_result = create_text_result(
+        """
+        1 G.O.(Rt) No. 114/2025/ITD
+        2 G.O.(Rt) No. 151/2025/ITD
+        3 G.O.(Rt) No. 228/2025/ITD
+        4 G.O.(Rt) No. 264/2025/ITD
+        """
+    )
+
+    result = extractor.extract(text_result)
+
+    assert len(result.references) == 4
+
+    assert result.references[0].ordinal == 1
+    assert result.references[1].ordinal == 2
+    assert result.references[2].ordinal == 3
+    assert result.references[3].ordinal == 4
+
+
+def test_modified_relationship_extracts_ordinals() -> None:
+    """Modified GO references should resolve their ordinal numbers."""
+
+    extractor = IdentifierExtractor()
+
+    text_result = create_text_result(
+        """
+        G.O.(Rt) No. 24/2026/ITD
+
+        1 G.O.(Rt) No. 114/2025/ITD
+        2 G.O.(Rt) No. 151/2025/ITD
+        3 G.O.(Rt) No. 228/2025/ITD
+        4 G.O.(Rt) No. 264/2025/ITD
+
+        The Government Orders read as 1st, 2nd and 4th
+        papers above are hereby modified.
+        """
+    )
+
+    result = extractor.extract(text_result)
+
+    amends_relationships = [
+        relationship
+        for relationship in result.relationships
+        if relationship.relationship_type
+        == RelationshipType.AMENDS
+    ]
+
+    assert len(amends_relationships) == 1
+
+    relationship = amends_relationships[0]
+
+    assert relationship.matched_phrase == "hereby modified"
+
+    assert relationship.reference_ordinals == [
+        1,
+        2,
+        4,
+    ]
+
+
+def test_read_as_papers_is_not_relationship() -> None:
+    """Ordinary 'read as' paper references are not relationships."""
+
+    extractor = IdentifierExtractor()
+
+    text_result = create_text_result(
+        """
+        Read 1 G.O.(Rt) No. 114/2025/ITD
+        2 G.O.(Rt) No. 151/2025/ITD
+
+        The Government Orders read as 1st and 2nd
+        papers above.
+        """
+    )
+
+    result = extractor.extract(text_result)
+
+    assert result.relationships == []
