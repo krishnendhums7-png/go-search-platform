@@ -50,24 +50,93 @@ class IdentifierExtractor:
         "Water Resources Department",
     ]
 
-    GO_NUMBER_PATTERN = re.compile(
+    # ------------------------------------------------------------------
+    # Malayalam Government Order category mapping
+    # ------------------------------------------------------------------
+
+    MALAYALAM_CATEGORY_MAP = {
+        "അച്ചടി": "P",
+        "സാധാ": "Rt",
+        "കൈ": "Ms",
+        "കൈ?": "Ms",
+    }
+
+    # ------------------------------------------------------------------
+    # English Government Order number
+    # ------------------------------------------------------------------
+
+    ENGLISH_GO_NUMBER_PATTERN = re.compile(
         r"""
         G\.?\s*O\.?
         \s*
         \(?
-        (?P<category>P|Rt)
+        (?P<category>P|Rt|Ms)
         \)?
         \s*
-        (?:No\.?|N[o0]\.? )
+        (?:No\.?|N[o0]\.?)
         \s*
         (?P<number>\d+)
         \s*/\s*
         (?P<year>\d{4})
         \s*/\s*
-        (?P<department>[A-Za-z]+)
+        (?P<department>[A-Za-z][A-Za-z&.-]*)
         """,
         re.IGNORECASE | re.VERBOSE,
     )
+
+    # ------------------------------------------------------------------
+    # Malayalam Government Order number
+    # ------------------------------------------------------------------
+
+    MALAYALAM_GO_NUMBER_PATTERN = re.compile(
+        r"""
+        സ
+        \s*\.\s*
+        ഉ
+        \s*\.
+        \s*
+        \(?
+        (?P<category>അച്ചടി|സാധാ|കൈ)\??
+        \)?
+        \s*
+        നം
+        \s*\.
+        \s*
+        (?P<number>\d+)
+        \s*/\s*
+        (?P<year>\d{4})
+        \s*/\s*
+        (?P<department>[^\s,;:]+)
+        """,
+        re.VERBOSE,
+    )
+
+    # ------------------------------------------------------------------
+    # OCR-tolerant Malayalam Government Order fallback
+    # ------------------------------------------------------------------
+
+    MALAYALAM_GO_NUMBER_FALLBACK_PATTERN = re.compile(
+        r"""
+        സ\.?\s*ഉ\.?
+        \s*
+        \(?
+        (?P<category>അച്ചടി|സാധാ|കൈ)\??
+        \)?
+        \s*
+        നം\.?
+        \s*
+        (?P<number>\d+)
+        \s*/\s*
+        (?P<year>\d{4})
+        \s*/\s*
+        (?P<department>[^\s,;:]+)
+        """,
+        re.VERBOSE,
+    )
+
+    # ------------------------------------------------------------------
+    # Numeric dates
+    # ------------------------------------------------------------------
 
     DATE_PATTERN = re.compile(
         r"""
@@ -80,7 +149,46 @@ class IdentifierExtractor:
         re.VERBOSE,
     )
 
-    REFERENCE_PATTERN = re.compile(
+    # ------------------------------------------------------------------
+    # Government Order header date
+    #
+    # Examples:
+    #
+    # Dated, Thiruvananthapuram, 8 th March, 2026
+    # Dated, Thiruvananthapuram, 8th March, 2026
+    # Dated 8 March 2026
+    # Dated: 8 March 2026
+    # ------------------------------------------------------------------
+
+    GO_HEADER_DATE_PATTERN = re.compile(
+        r"""
+        \bdated\b
+        [,\s:]*
+        (?:[A-Za-z .'-]+,\s*)?
+        (?P<day>\d{1,2})
+        \s*(?:st|nd|rd|th)?
+        \s+
+        (?P<month>
+            January|February|March|April|May|June|
+            July|August|September|October|November|December
+        )
+        \s*,?\s*
+        (?P<year>\d{4})
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+    # Maximum distance between the main GO number and its header date.
+    #
+    # This prevents dates belonging to later referenced GOs from being
+    # treated as the primary GO's issue date.
+    GO_HEADER_SEARCH_WINDOW = 500
+
+    # ------------------------------------------------------------------
+    # English numbered Government Order references
+    # ------------------------------------------------------------------
+
+    ENGLISH_REFERENCE_PATTERN = re.compile(
         r"""
         (?P<ordinal>\d{1,2})
         (?:st|nd|rd|th)?
@@ -88,19 +196,49 @@ class IdentifierExtractor:
         G\.?\s*O\.?
         \s*
         \(?
-        (?P<category>P|Rt)
+        (?P<category>P|Rt|Ms)
         \)?
         \s*
-        (?:No\.?|N[o0]\.? )
+        (?:No\.?|N[o0]\.?)
         \s*
         (?P<number>\d+)
         \s*/\s*
         (?P<year>\d{4})
         \s*/\s*
-        (?P<department>[A-Za-z]+)
+        (?P<department>[A-Za-z][A-Za-z&.-]*)
         """,
         re.IGNORECASE | re.VERBOSE,
     )
+
+    # ------------------------------------------------------------------
+    # Malayalam numbered Government Order references
+    # ------------------------------------------------------------------
+
+    MALAYALAM_REFERENCE_PATTERN = re.compile(
+        r"""
+        (?P<ordinal>\d{1,2})
+        (?:st|nd|rd|th)?
+        \s*
+        സ\.?\s*ഉ\.?
+        \s*
+        \(?
+        (?P<category>അച്ചടി|സാധാ|കൈ)\??
+        \)?
+        \s*
+        നം\.?
+        \s*
+        (?P<number>\d+)
+        \s*/\s*
+        (?P<year>\d{4})
+        \s*/\s*
+        (?P<department>[^\s,;:]+)
+        """,
+        re.VERBOSE,
+    )
+
+    # ------------------------------------------------------------------
+    # Ordinal pattern
+    # ------------------------------------------------------------------
 
     ORDINAL_PATTERN = re.compile(
         r"""
@@ -110,8 +248,13 @@ class IdentifierExtractor:
         re.IGNORECASE | re.VERBOSE,
     )
 
+    # ------------------------------------------------------------------
+    # Legal relationship phrases
+    # ------------------------------------------------------------------
+
     RELATIONSHIP_PHRASES = {
         RelationshipType.AMENDS: [
+            # English
             "modified to the above extent",
             "hereby modified",
             "hereby amended",
@@ -119,30 +262,54 @@ class IdentifierExtractor:
             "amended by",
             "amends",
             "modifies",
+
+            # Malayalam
             "ഭേദഗതി ചെയ്യുന്നു",
+            "ഭേദഗതി ചെയ്തിരിക്കുന്നു",
+            "ഭേദഗതി ചെയ്യുന്നതിന്",
             "ഭേദഗതി",
         ],
+
         RelationshipType.SUPERSEDES: [
+            # English
             "in supersession of",
             "superseded by",
             "supersedes",
-            "മാറ്റിസ്ഥാപിക്കുന്നു",
+
+            # Malayalam
+            "പകരം",
+            "പൂർണ്ണമായി റദ്ദാക്കി",
+            "പിൻവലിച്ച്",
         ],
+
         RelationshipType.CANCELS: [
+            # English
             "stands cancelled",
             "cancelled",
             "canceled",
             "cancels",
+
+            # Malayalam
             "റദ്ദാക്കുന്നു",
+            "റദ്ദാക്കിയിരിക്കുന്നു",
             "റദ്ദാക്കി",
         ],
+
         RelationshipType.READ_AS: [
+            # English
             "shall be read as",
+
+            # Malayalam
+            "വായിക്കേണ്ടതാണ്",
             "വായിക്കേണ്ടത്",
         ],
     }
 
     DEPARTMENT_THRESHOLD = 90
+
+    # ==================================================================
+    # Public extraction method
+    # ==================================================================
 
     def extract(
         self,
@@ -189,10 +356,16 @@ class IdentifierExtractor:
             )
 
         # ----------------------------------------------------------
+        # Identify the issue date associated with the primary GO.
+        # ----------------------------------------------------------
+
+        self._identify_primary_go_header_date(
+            text_result=text_result,
+            result=result,
+        )
+
+        # ----------------------------------------------------------
         # Extract relationships after all references are known.
-        #
-        # This allows a relationship on page 4 to refer to a GO
-        # reference that was introduced on page 1.
         # ----------------------------------------------------------
 
         for page in text_result.pages:
@@ -206,22 +379,38 @@ class IdentifierExtractor:
 
         return result
 
+    # ==================================================================
+    # Government Order number extraction
+    # ==================================================================
+
     def _extract_go_numbers(
         self,
         text: str,
         result: IdentifierExtractionResult,
     ) -> None:
-        """Extract Government Order numbers using regex."""
+        """Extract English and Malayalam Government Order numbers."""
 
-        for match in self.GO_NUMBER_PATTERN.finditer(text):
-            category = match.group("category")
+        # ----------------------------------------------------------
+        # English GO numbers.
+        # ----------------------------------------------------------
+
+        for match in self.ENGLISH_GO_NUMBER_PATTERN.finditer(text):
+            category = self._normalize_english_category(
+                match.group("category")
+            )
+
             number = match.group("number")
             year = match.group("year")
-            department = match.group("department")
 
-            normalized_value = (
-                f"G.O.({category}) "
-                f"No. {number}/{year}/{department}"
+            department = self._clean_department(
+                match.group("department")
+            )
+
+            normalized_value = self._format_go_number(
+                category=category,
+                number=number,
+                year=year,
+                department=department,
             )
 
             self._add_unique_identifier(
@@ -233,12 +422,94 @@ class IdentifierExtractor:
                 ),
             )
 
+        # ----------------------------------------------------------
+        # Malayalam GO numbers.
+        # ----------------------------------------------------------
+
+        malayalam_matches = list(
+            self.MALAYALAM_GO_NUMBER_PATTERN.finditer(text)
+        )
+
+        if not malayalam_matches:
+            malayalam_matches = list(
+                self.MALAYALAM_GO_NUMBER_FALLBACK_PATTERN.finditer(
+                    text
+                )
+            )
+
+        for match in malayalam_matches:
+            category = self._normalize_malayalam_category(
+                match.group("category")
+            )
+
+            number = match.group("number")
+            year = match.group("year")
+
+            department = self._clean_department(
+                match.group("department")
+            )
+
+            normalized_value = self._format_go_number(
+                category=category,
+                number=number,
+                year=year,
+                department=department,
+            )
+
+            self._add_unique_identifier(
+                collection=result.go_numbers,
+                identifier=ExtractedIdentifier(
+                    value=normalized_value,
+                    confidence=ExtractionConfidence.HIGH,
+                    extraction_method="REGEX_MALAYALAM",
+                ),
+            )
+
+    # ==================================================================
+    # Date extraction
+    # ==================================================================
+
     def _extract_dates(
         self,
         text: str,
         result: IdentifierExtractionResult,
     ) -> None:
-        """Extract date-like values."""
+        """
+        Extract Government Order header dates and generic dates.
+
+        Header dates are initially marked as GO_HEADER.
+
+        The primary GO header date is identified separately after
+        all pages have been processed.
+        """
+
+        # ----------------------------------------------------------
+        # Government Order header dates.
+        # ----------------------------------------------------------
+
+        for match in self.GO_HEADER_DATE_PATTERN.finditer(text):
+            day = int(match.group("day"))
+            month = match.group("month")
+            year = int(match.group("year"))
+
+            value = (
+                f"{day:02d} "
+                f"{month} "
+                f"{year}"
+            )
+
+            self._add_unique_identifier(
+                collection=result.issue_dates,
+                identifier=ExtractedIdentifier(
+                    value=value,
+                    confidence=ExtractionConfidence.HIGH,
+                    extraction_method="GO_HEADER",
+                ),
+            )
+
+        # ----------------------------------------------------------
+        # Generic numeric dates.
+        # ----------------------------------------------------------
 
         for match in self.DATE_PATTERN.finditer(text):
             value = match.group(0)
@@ -251,6 +522,148 @@ class IdentifierExtractor:
                     extraction_method="REGEX",
                 ),
             )
+
+    # ==================================================================
+    # Primary GO header date
+    # ==================================================================
+
+    def _identify_primary_go_header_date(
+        self,
+        text_result: TextExtractionResult,
+        result: IdentifierExtractionResult,
+    ) -> None:
+        """
+        Identify the issue date belonging to the primary Government Order.
+
+        The primary Government Order is the first GO number detected
+        in document order.
+
+        Only a bounded region after that GO number is inspected.
+        This prevents dates belonging to referenced Government Orders
+        later in the document from being selected.
+
+        No date is guessed when the primary header cannot be resolved.
+        """
+
+        for page in text_result.pages:
+            # ------------------------------------------------------
+            # Find the first English GO number on this page.
+            # ------------------------------------------------------
+
+            english_match = (
+                self.ENGLISH_GO_NUMBER_PATTERN.search(
+                    page.text
+                )
+            )
+
+            # ------------------------------------------------------
+            # Find the first Malayalam GO number on this page.
+            # ------------------------------------------------------
+
+            malayalam_match = (
+                self.MALAYALAM_GO_NUMBER_PATTERN.search(
+                    page.text
+                )
+            )
+
+            if malayalam_match is None:
+                malayalam_match = (
+                    self.MALAYALAM_GO_NUMBER_FALLBACK_PATTERN.search(
+                        page.text
+                    )
+                )
+
+            # ------------------------------------------------------
+            # Select whichever GO number occurs first.
+            # ------------------------------------------------------
+
+            candidates = [
+                match
+                for match in (
+                    english_match,
+                    malayalam_match,
+                )
+                if match is not None
+            ]
+
+            if not candidates:
+                continue
+
+            go_match = min(
+                candidates,
+                key=lambda match: match.start(),
+            )
+
+            # ------------------------------------------------------
+            # Search only near the GO header.
+            # ------------------------------------------------------
+
+            header_end = min(
+                len(page.text),
+                go_match.end()
+                + self.GO_HEADER_SEARCH_WINDOW,
+            )
+
+            header_text = page.text[
+                go_match.end():header_end
+            ]
+
+            date_match = (
+                self.GO_HEADER_DATE_PATTERN.search(
+                    header_text
+                )
+            )
+
+            if date_match is None:
+                continue
+
+            day = int(
+                date_match.group("day")
+            )
+
+            month = date_match.group("month")
+
+            year = int(
+                date_match.group("year")
+            )
+
+            primary_value = (
+                f"{day:02d} "
+                f"{month} "
+                f"{year}"
+            )
+
+            # ------------------------------------------------------
+            # Upgrade the matching date to primary status.
+            # ------------------------------------------------------
+
+            for identifier in result.issue_dates:
+                if identifier.value == primary_value:
+                    identifier.confidence = (
+                        ExtractionConfidence.HIGH
+                    )
+                    identifier.extraction_method = (
+                        "GO_HEADER_PRIMARY"
+                    )
+                    return
+
+            # ------------------------------------------------------
+            # If it was not already extracted, add it.
+            # ------------------------------------------------------
+
+            result.issue_dates.append(
+                ExtractedIdentifier(
+                    value=primary_value,
+                    confidence=ExtractionConfidence.HIGH,
+                    extraction_method="GO_HEADER_PRIMARY",
+                )
+            )
+
+            return
+
+    # ==================================================================
+    # Department extraction
+    # ==================================================================
 
     def _extract_departments(
         self,
@@ -352,6 +765,10 @@ class IdentifierExtractor:
                 f"(score={score:.1f})"
             )
 
+    # ==================================================================
+    # Reference extraction
+    # ==================================================================
+
     def _extract_references(
         self,
         text: str,
@@ -361,41 +778,78 @@ class IdentifierExtractor:
         """
         Extract numbered Government Order references.
 
-        Example:
-
-            1 G.O.(Rt) No. 114/2025/ITD
-
-        becomes:
-
-            ordinal = 1
-            go_number = G.O.(Rt) No. 114/2025/ITD
+        Supports both English and Malayalam GO notation.
         """
 
-        for match in self.REFERENCE_PATTERN.finditer(text):
-            ordinal = int(
-                match.group("ordinal")
-            )
+        # ----------------------------------------------------------
+        # English references.
+        # ----------------------------------------------------------
 
-            category = match.group("category")
-            number = match.group("number")
-            year = match.group("year")
-            department = match.group("department")
-
-            go_number = (
-                f"G.O.({category}) "
-                f"No. {number}/{year}/{department}"
-            )
-
-            reference = ExtractedReference(
-                ordinal=ordinal,
-                go_number=go_number,
+        for match in self.ENGLISH_REFERENCE_PATTERN.finditer(text):
+            self._add_reference(
+                match=match,
                 page_number=page_number,
+                result=result,
+                category=self._normalize_english_category(
+                    match.group("category")
+                ),
             )
 
-            if reference not in result.references:
-                result.references.append(
-                    reference
-                )
+        # ----------------------------------------------------------
+        # Malayalam references.
+        # ----------------------------------------------------------
+
+        for match in self.MALAYALAM_REFERENCE_PATTERN.finditer(text):
+            self._add_reference(
+                match=match,
+                page_number=page_number,
+                result=result,
+                category=self._normalize_malayalam_category(
+                    match.group("category")
+                ),
+            )
+
+    @staticmethod
+    def _add_reference(
+        match: re.Match[str],
+        page_number: int,
+        result: IdentifierExtractionResult,
+        category: str,
+    ) -> None:
+        """Convert a regex match into an extracted reference."""
+
+        ordinal = int(
+            match.group("ordinal")
+        )
+
+        number = match.group("number")
+        year = match.group("year")
+
+        department = IdentifierExtractor._clean_department(
+            match.group("department")
+        )
+
+        go_number = IdentifierExtractor._format_go_number(
+            category=category,
+            number=number,
+            year=year,
+            department=department,
+        )
+
+        reference = ExtractedReference(
+            ordinal=ordinal,
+            go_number=go_number,
+            page_number=page_number,
+        )
+
+        if reference not in result.references:
+            result.references.append(
+                reference
+            )
+
+    # ==================================================================
+    # Relationship extraction
+    # ==================================================================
 
     def _extract_relationships(
         self,
@@ -408,13 +862,6 @@ class IdentifierExtractor:
 
         Multiple overlapping phrases describing the same legal
         action are consolidated into one relationship.
-
-        For example:
-
-            hereby modified
-            modified to the above extent
-
-        represent one AMENDS relationship.
         """
 
         text_lower = text.lower()
@@ -456,10 +903,7 @@ class IdentifierExtractor:
                 )
 
         # ----------------------------------------------------------
-        # Consolidate overlapping AMENDS phrases.
-        #
-        # The longest matching phrase is retained because it
-        # contains more specific legal context.
+        # Consolidate overlapping relationship phrases.
         # ----------------------------------------------------------
 
         for relationship_type in (
@@ -554,6 +998,10 @@ class IdentifierExtractor:
                     relationship
                 )
 
+    # ==================================================================
+    # Relationship ordinal extraction
+    # ==================================================================
+
     @staticmethod
     def _extract_context_ordinals(
         text: str,
@@ -562,14 +1010,6 @@ class IdentifierExtractor:
         """
         Extract ordinal references from the legal context
         preceding a relationship phrase.
-
-        Example:
-
-            1st, 2nd and 4th papers above are hereby modified
-
-        returns:
-
-            [1, 2, 4]
         """
 
         phrase_pattern = re.compile(
@@ -582,7 +1022,6 @@ class IdentifierExtractor:
         if match is None:
             return []
 
-        # Examine the local legal context.
         context_start = max(
             0,
             match.start() - 300,
@@ -602,6 +1041,10 @@ class IdentifierExtractor:
             int(ordinal)
             for ordinal in ordinal_matches
         ]
+
+    # ==================================================================
+    # Relationship reference validation
+    # ==================================================================
 
     @staticmethod
     def _resolve_relationship_references(
@@ -629,6 +1072,67 @@ class IdentifierExtractor:
                 if ordinal in valid_ordinals
             ]
 
+    # ==================================================================
+    # Normalization helpers
+    # ==================================================================
+
+    @staticmethod
+    def _normalize_english_category(
+        category: str,
+    ) -> str:
+        """Normalize an English Government Order category."""
+
+        cleaned = category.strip().lower()
+
+        if cleaned == "p":
+            return "P"
+
+        if cleaned == "rt":
+            return "Rt"
+
+        if cleaned == "ms":
+            return "Ms"
+
+        return category.strip()
+
+    @classmethod
+    def _normalize_malayalam_category(
+        cls,
+        category: str,
+    ) -> str:
+        """Normalize a Malayalam Government Order category."""
+
+        cleaned = category.strip()
+
+        return cls.MALAYALAM_CATEGORY_MAP.get(
+            cleaned,
+            cleaned,
+        )
+
+    @staticmethod
+    def _clean_department(
+        department: str,
+    ) -> str:
+        """Normalize OCR whitespace and punctuation."""
+
+        return department.strip(
+            " .,:;()[]{}?"
+        )
+
+    @staticmethod
+    def _format_go_number(
+        category: str,
+        number: str,
+        year: str,
+        department: str,
+    ) -> str:
+        """Create the canonical Government Order number."""
+
+        return (
+            f"G.O.({category}) "
+            f"No. {number}/{year}/{department}"
+        )
+
     @staticmethod
     def _add_unique_identifier(
         collection: list[ExtractedIdentifier],
@@ -642,7 +1146,9 @@ class IdentifierExtractor:
         }
 
         if identifier.value not in existing_values:
-            collection.append(identifier)
+            collection.append(
+                identifier
+            )
 
 
 identifier_extractor = IdentifierExtractor()

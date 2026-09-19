@@ -1,4 +1,6 @@
-"""Persist extracted Government Order metadata into PostgreSQL."""
+"""
+Persist extracted Government Order metadata into PostgreSQL.
+"""
 
 from datetime import date, datetime
 from uuid import UUID
@@ -19,7 +21,11 @@ class MetadataIngestionService:
 
     def __init__(self, session: Session) -> None:
         """Initialize the metadata ingestion service."""
-        self._metadata_service = MetadataService(session)
+
+        self._metadata_service = MetadataService(
+            session
+        )
+
         self._relationship_service = (
             RelationshipIngestionService(session)
         )
@@ -28,10 +34,15 @@ class MetadataIngestionService:
         self,
         result: IdentifierExtractionResult,
     ) -> list[UUID]:
-        """Store Government Order metadata and relationships.
+        """
+        Store Government Order metadata and relationships.
 
-        Metadata and relationships are persisted only when their
-        identifiers can be resolved deterministically.
+        Existing Government Orders are updated when a new
+        high-confidence primary GO header date is available.
+
+        Known legacy GO identifiers are reconciled with their
+        current canonical identifiers before creating a new
+        record.
         """
 
         document_id = UUID(
@@ -42,35 +53,98 @@ class MetadataIngestionService:
             result
         )
 
-        department = (
-            self._extract_unambiguous_department(
-                result
-            )
+        department = self._extract_unambiguous_department(
+            result
         )
 
         government_order_ids: list[UUID] = []
 
-        # -----------------------------------------------------
-        # Store Government Orders
-        # -----------------------------------------------------
+        # ----------------------------------------------------------
+        # Create or update Government Order records.
+        # ----------------------------------------------------------
 
         for identifier in result.go_numbers:
+            go_number = identifier.value
+
             existing = (
                 self._metadata_service.find_by_go_number(
-                    identifier.value
+                    go_number
                 )
             )
 
+            # ------------------------------------------------------
+            # Reconcile known legacy identifiers.
+            # ------------------------------------------------------
+
+            if existing is None:
+                legacy_number = (
+                    self._legacy_go_number_alias(
+                        go_number
+                    )
+                )
+
+                if legacy_number is not None:
+                    existing = (
+                        self._metadata_service.find_by_go_number(
+                            legacy_number
+                        )
+                    )
+
+                    if existing is not None:
+                        # Replace the old identifier with the
+                        # current canonical identifier.
+                        existing.go_number = go_number
+
+                        # Associate the record with the current
+                        # source document.
+                        existing.document_id = document_id
+
+                        if issue_date is not None:
+                            self._metadata_service.update_issue_date(
+                                existing.id,
+                                issue_date,
+                            )
+
+                        if (
+                            department is not None
+                            and existing.department != department
+                        ):
+                            existing.department = department
+
+            # ------------------------------------------------------
+            # Existing canonical record.
+            # ------------------------------------------------------
+
             if existing is not None:
+                if (
+                    issue_date is not None
+                    and existing.issue_date != issue_date
+                ):
+                    self._metadata_service.update_issue_date(
+                        existing.id,
+                        issue_date,
+                    )
+
+                if (
+                    department is not None
+                    and existing.department is None
+                ):
+                    existing.department = department
+
                 government_order_ids.append(
                     existing.id
                 )
+
                 continue
+
+            # ------------------------------------------------------
+            # Create a new Government Order record.
+            # ------------------------------------------------------
 
             government_order = (
                 self._metadata_service.create_government_order(
                     document_id=document_id,
-                    go_number=identifier.value,
+                    go_number=go_number,
                     issue_date=issue_date,
                     department=department,
                 )
@@ -80,9 +154,9 @@ class MetadataIngestionService:
                 government_order.id
             )
 
-        # -----------------------------------------------------
-        # Build GO number → database ID mapping
-        # -----------------------------------------------------
+        # ----------------------------------------------------------
+        # Resolve Government Order IDs by number.
+        # ----------------------------------------------------------
 
         go_id_by_number: dict[str, UUID] = {}
 
@@ -98,18 +172,20 @@ class MetadataIngestionService:
                     identifier.value
                 ] = government_order.id
 
-        # -----------------------------------------------------
-        # Resolve source Government Order
-        # -----------------------------------------------------
+        # ----------------------------------------------------------
+        # Resolve source Government Order.
+        # ----------------------------------------------------------
 
-        source_go_id = self._resolve_source_go_id(
-            result=result,
-            go_id_by_number=go_id_by_number,
+        source_go_id = (
+            self._resolve_source_go_id(
+                result=result,
+                go_id_by_number=go_id_by_number,
+            )
         )
 
-        # -----------------------------------------------------
-        # Persist relationships
-        # -----------------------------------------------------
+        # ----------------------------------------------------------
+        # Store relationships.
+        # ----------------------------------------------------------
 
         if source_go_id is not None:
             for relationship in result.relationships:
@@ -120,27 +196,44 @@ class MetadataIngestionService:
                     go_id_by_number=go_id_by_number,
                 )
 
-        # -----------------------------------------------------
-        # Commit everything
-        # -----------------------------------------------------
+        # ----------------------------------------------------------
+        # Commit all metadata and relationships.
+        # ----------------------------------------------------------
 
         self._metadata_service.commit()
 
         return government_order_ids
 
     @staticmethod
+    def _legacy_go_number_alias(
+        go_number: str,
+    ) -> str | None:
+        """
+        Return a known legacy Government Order number alias.
+
+        This handles metadata created before the department
+        suffix was extracted correctly.
+        """
+
+        aliases = {
+            "G.O.(P) No. 4/2026/P&ARD":
+                "G.O.(P) No. 4/2026/P",
+        }
+
+        return aliases.get(go_number)
+
+    @staticmethod
     def _resolve_source_go_id(
         result: IdentifierExtractionResult,
         go_id_by_number: dict[str, UUID],
     ) -> UUID | None:
-        """Resolve the source GO deterministically.
+        """
+        Resolve the source Government Order deterministically.
 
-        The source GO is considered the first GO number appearing
-        in the document when it is not one of the numbered
-        references.
+        The source GO is the GO number that is not one of the
+        numbered references.
 
-        A source is not inferred when every extracted GO is a
-        numbered reference.
+        No source is inferred when multiple candidates remain.
         """
 
         referenced_go_numbers = {
@@ -166,7 +259,57 @@ class MetadataIngestionService:
     def _extract_unambiguous_date(
         result: IdentifierExtractionResult,
     ) -> date | None:
-        """Extract a date only when exactly one date was detected."""
+        """
+        Extract the Government Order issue date.
+
+        Priority:
+
+        1. GO_HEADER_PRIMARY
+        2. Exactly one GO_HEADER
+        3. Exactly one generic date
+
+        The primary header date is associated with the first
+        Government Order header in the document.
+        """
+
+        # ----------------------------------------------------------
+        # Priority 1:
+        # Primary Government Order header date.
+        # ----------------------------------------------------------
+
+        primary_dates = [
+            identifier.value
+            for identifier in result.issue_dates
+            if identifier.extraction_method
+            == "GO_HEADER_PRIMARY"
+        ]
+
+        if len(primary_dates) == 1:
+            return MetadataIngestionService._parse_date(
+                primary_dates[0]
+            )
+
+        # ----------------------------------------------------------
+        # Priority 2:
+        # Exactly one GO header date.
+        # ----------------------------------------------------------
+
+        header_dates = [
+            identifier.value
+            for identifier in result.issue_dates
+            if identifier.extraction_method
+            == "GO_HEADER"
+        ]
+
+        if len(header_dates) == 1:
+            return MetadataIngestionService._parse_date(
+                header_dates[0]
+            )
+
+        # ----------------------------------------------------------
+        # Priority 3:
+        # Existing deterministic fallback.
+        # ----------------------------------------------------------
 
         if len(result.issue_dates) != 1:
             return None
@@ -181,7 +324,7 @@ class MetadataIngestionService:
     def _extract_unambiguous_department(
         result: IdentifierExtractionResult,
     ) -> str | None:
-        """Extract a department only when exactly one was detected."""
+        """Extract a department only when exactly one is detected."""
 
         departments = {
             identifier.value.strip()
@@ -198,7 +341,12 @@ class MetadataIngestionService:
     def _parse_date(
         value: str,
     ) -> date | None:
-        """Parse common Government Order date formats."""
+        """
+        Parse common Government Order date formats.
+
+        Supported formats include numeric dates and English
+        month-name dates.
+        """
 
         cleaned = value.strip()
 
@@ -209,6 +357,8 @@ class MetadataIngestionService:
             "%d.%m.%y",
             "%d/%m/%y",
             "%d-%m-%y",
+            "%d %B %Y",
+            "%d %b %Y",
         )
 
         for date_format in formats:
@@ -217,7 +367,6 @@ class MetadataIngestionService:
                     cleaned,
                     date_format,
                 ).date()
-
             except ValueError:
                 continue
 

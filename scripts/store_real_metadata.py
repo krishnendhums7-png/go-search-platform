@@ -6,6 +6,14 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from app.services.document_service import DocumentService
 from app.services.metadata_ingestion_service import (
     MetadataIngestionService,
