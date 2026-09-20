@@ -70,6 +70,33 @@ class MetadataService:
             government_order_id,
         )
 
+    def get_by_document_id(
+        self,
+        document_id: UUID,
+    ) -> list[GovernmentOrderModel]:
+        """
+        Retrieve all Government Orders belonging to a document.
+
+        Args:
+            document_id:
+                Document UUID.
+
+        Returns:
+            Government Order metadata records associated
+            with the document.
+        """
+
+        statement = select(
+            GovernmentOrderModel
+        ).where(
+            GovernmentOrderModel.document_id
+            == document_id,
+        )
+
+        return list(
+            self._session.scalars(statement).all()
+        )
+
     def update_issue_date(
         self,
         government_order_id: UUID,

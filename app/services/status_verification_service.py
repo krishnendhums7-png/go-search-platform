@@ -87,19 +87,32 @@ class StatusVerificationService:
         """
         Verify Government Order status using its GO number.
 
+        The caller may provide either:
+
+            114/2025/ITD
+
+        or:
+
+            G.O.(Rt) No. 114/2025/ITD
+
+        The database stores the full Government Order representation,
+        so short GO numbers are normalized before metadata lookup.
+
         Args:
             go_number:
-                Canonical Government Order number.
+                Government Order number.
 
         Returns:
             StatusVerificationResult.
 
         Raises:
             ValueError:
-                If the Government Order does not exist.
+                If the Government Order number is empty or does not exist.
         """
 
-        cleaned_go_number = go_number.strip()
+        cleaned_go_number = self._normalize_go_number(
+            go_number
+        )
 
         if not cleaned_go_number:
             raise ValueError(
@@ -119,6 +132,49 @@ class StatusVerificationService:
 
         return self.verify(
             government_order.id
+        )
+
+    @staticmethod
+    def _normalize_go_number(
+        go_number: str,
+    ) -> str:
+        """
+        Normalize a Government Order number.
+
+        Examples:
+
+            114/2025/ITD
+            -> G.O.(Rt) No. 114/2025/ITD
+
+            G.O.(Rt) No. 114/2025/ITD
+            -> G.O.(Rt) No. 114/2025/ITD
+
+            G.O.(P) No. 10/2025/FIN
+            -> G.O.(P) No. 10/2025/FIN
+
+            G.O.(Ms) No. 10/2025/FIN
+            -> G.O.(Ms) No. 10/2025/FIN
+
+        Args:
+            go_number:
+                Raw Government Order number.
+
+        Returns:
+            Normalized Government Order number.
+        """
+
+        cleaned = " ".join(
+            go_number.strip().split()
+        )
+
+        if not cleaned:
+            return ""
+
+        if cleaned.lower().startswith("g.o."):
+            return cleaned
+
+        return (
+            f"G.O.(Rt) No. {cleaned}"
         )
 
     def verify(
@@ -371,10 +427,9 @@ class StatusVerificationService:
             # ==========================================================
             # POST-ORDER PROCESSING
             # ==========================================================
-            #
+
             # All reachable newer Government Orders have now been
             # traversed.
-            # ==========================================================
 
             status = self._calculate_status(
                 current_go_id=current_id,
@@ -496,6 +551,13 @@ class StatusVerificationService:
         Therefore status is determined from the explicit
         relationship graph rather than requiring the source
         Government Order to have ACTIVE status.
+
+        Args:
+            current_go_id:
+                Database ID of the Government Order.
+
+        Returns:
+            Calculated GovernmentOrderStatus.
         """
 
         relationships = (

@@ -66,6 +66,59 @@ def test_find_government_order(
     assert result.go_number == "G.O.(P) No.15/2026/FIN"
 
 
+def test_get_by_document_id(
+    session: Session,
+) -> None:
+    """Test retrieving Government Orders by document ID."""
+    service = MetadataService(session)
+
+    document_id = uuid4()
+
+    service.create_government_order(
+        document_id=document_id,
+        go_number="G.O.(P) No.10/2026/TEST",
+    )
+
+    service.create_government_order(
+        document_id=document_id,
+        go_number="G.O.(P) No.11/2026/TEST",
+    )
+
+    # Create another Government Order belonging
+    # to a different document.
+    service.create_government_order(
+        document_id=uuid4(),
+        go_number="G.O.(P) No.12/2026/TEST",
+    )
+
+    results = service.get_by_document_id(
+        document_id=document_id,
+    )
+
+    assert len(results) == 2
+
+    assert {
+        result.go_number
+        for result in results
+    } == {
+        "G.O.(P) No.10/2026/TEST",
+        "G.O.(P) No.11/2026/TEST",
+    }
+
+
+def test_get_by_document_id_returns_empty_list(
+    session: Session,
+) -> None:
+    """Test document lookup when no metadata exists."""
+    service = MetadataService(session)
+
+    results = service.get_by_document_id(
+        document_id=uuid4(),
+    )
+
+    assert results == []
+
+
 def test_create_directed_relationship(
     session: Session,
 ) -> None:

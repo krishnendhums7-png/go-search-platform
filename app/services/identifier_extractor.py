@@ -7,6 +7,7 @@ It does not use an LLM.
 """
 
 import re
+from datetime import date
 
 from rapidfuzz import fuzz
 from rapidfuzz import process
@@ -48,6 +49,7 @@ class IdentifierExtractor:
         "Agriculture Department",
         "Transport Department",
         "Water Resources Department",
+        "Electronics & Information Technology Department",
     ]
 
     # ------------------------------------------------------------------
@@ -173,6 +175,29 @@ class IdentifierExtractor:
             July|August|September|October|November|December
         )
         \s*,?\s*
+        (?P<year>\d{4})
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+    # Numeric Government Order header date.
+    #
+    # Examples:
+    #
+    # Dated,Thiruvananthapuram, 23-02-2026
+    # Dated: 23/02/2026
+    # Dated 23.02.2026
+    # ------------------------------------------------------------------
+
+    GO_HEADER_NUMERIC_DATE_PATTERN = re.compile(
+        r"""
+        \bdated\b
+        [,\s:]*
+        (?:[A-Za-z .'-]+,\s*)?
+        (?P<day>\d{1,2})
+        [./-]
+        (?P<month>\d{1,2})
+        [./-]
         (?P<year>\d{4})
         """,
         re.IGNORECASE | re.VERBOSE,
@@ -344,14 +369,25 @@ class IdentifierExtractor:
                 result,
             )
 
-            self._extract_departments(
-                page.text,
-                result,
-            )
-
             self._extract_references(
                 page.text,
                 page.page_number,
+                result,
+            )
+
+        # ----------------------------------------------------------
+        # Extract the issuing department from the first page header.
+        # ----------------------------------------------------------
+        #
+        # Department names later in a Government Order can belong to
+        # recipient lists or referenced departments. The first page is
+        # therefore treated as the authoritative issuing-department
+        # region.
+        # ----------------------------------------------------------
+
+        if text_result.pages:
+            self._extract_departments(
+                text_result.pages[0].text,
                 result,
             )
 
@@ -479,12 +515,15 @@ class IdentifierExtractor:
 
         Header dates are initially marked as GO_HEADER.
 
+        Numeric header dates such as ``23-02-2026`` are supported
+        separately so they are not confused with ordinary dates.
+
         The primary GO header date is identified separately after
         all pages have been processed.
         """
 
         # ----------------------------------------------------------
-        # Government Order header dates.
+        # Government Order header dates with textual months.
         # ----------------------------------------------------------
 
         for match in self.GO_HEADER_DATE_PATTERN.finditer(text):
@@ -508,11 +547,67 @@ class IdentifierExtractor:
             )
 
         # ----------------------------------------------------------
+        # Government Order header dates with numeric months.
+        # ----------------------------------------------------------
+
+        for match in self.GO_HEADER_NUMERIC_DATE_PATTERN.finditer(
+            text
+        ):
+            day = int(match.group("day"))
+            month = int(match.group("month"))
+            year = int(match.group("year"))
+
+            if not self._is_valid_date_parts(
+                day=day,
+                month=month,
+                year=year,
+            ):
+                continue
+
+            # Preserve the separator used in the source text.
+            # This keeps values such as 15.08.2024 unchanged while
+            # still allowing normalized duplicate detection later.
+            matched_date = match.group(0)
+            separator_match = re.search(
+                r"\d{1,2}([./-])\d{1,2}([./-])\d{4}",
+                matched_date,
+            )
+
+            if separator_match is not None:
+                first_separator = separator_match.group(1)
+                second_separator = separator_match.group(2)
+            else:
+                first_separator = "-"
+                second_separator = "-"
+
+            value = (
+                f"{day:02d}"
+                f"{first_separator}"
+                f"{month:02d}"
+                f"{second_separator}"
+                f"{year}"
+            )
+
+            self._add_unique_identifier(
+                collection=result.issue_dates,
+                identifier=ExtractedIdentifier(
+                    value=value,
+                    confidence=ExtractionConfidence.HIGH,
+                    extraction_method="GO_HEADER",
+                ),
+            )
+
+        # ----------------------------------------------------------
         # Generic numeric dates.
+        #
+        # Ignore impossible dates and implausible OCR years.
         # ----------------------------------------------------------
 
         for match in self.DATE_PATTERN.finditer(text):
             value = match.group(0)
+
+            if not self._is_valid_generic_date(value):
+                continue
 
             self._add_unique_identifier(
                 collection=result.issue_dates,
@@ -522,6 +617,103 @@ class IdentifierExtractor:
                     extraction_method="REGEX",
                 ),
             )
+
+        # ----------------------------------------------------------
+        # Remove duplicate dates represented with different
+        # separators. Header dates have higher confidence than
+        # generic regex dates, so the existing high-confidence
+        # extraction is retained.
+        # ----------------------------------------------------------
+
+        self._deduplicate_dates(result)
+
+    @staticmethod
+    def _deduplicate_dates(
+        result: IdentifierExtractionResult,
+    ) -> None:
+        """Remove duplicate dates that use different separators.
+
+        For example, ``15-08-2024`` and ``15.08.2024`` represent
+        the same date. When multiple extraction methods find the
+        same date, the highest-confidence identifier is retained.
+
+        The order of ``result.issue_dates`` is preserved.
+        """
+
+        confidence_rank = {
+            ExtractionConfidence.HIGH: 3,
+            ExtractionConfidence.MEDIUM: 2,
+            ExtractionConfidence.LOW: 1,
+        }
+
+        unique_dates: dict[str, ExtractedIdentifier] = {}
+        ordered_keys: list[str] = []
+
+        for identifier in result.issue_dates:
+            normalized = IdentifierExtractor._normalize_date_value(
+                identifier.value,
+            )
+
+            existing = unique_dates.get(normalized)
+
+            if existing is None:
+                unique_dates[normalized] = identifier
+                ordered_keys.append(normalized)
+                continue
+
+            if (
+                confidence_rank[identifier.confidence]
+                > confidence_rank[existing.confidence]
+            ):
+                unique_dates[normalized] = identifier
+
+        result.issue_dates = [
+            unique_dates[key]
+            for key in ordered_keys
+        ]
+
+    @staticmethod
+    def _normalize_date_value(value: str) -> str:
+        """Normalize numeric date separators for duplicate detection."""
+
+        return value.replace("/", "-").replace(".", "-")
+
+        # ----------------------------------------------------------
+        # Remove duplicate dates represented with different separators.
+        # Keep the highest-confidence extraction while preserving its
+        # original formatting.
+        # ----------------------------------------------------------
+
+        confidence_rank = {
+            ExtractionConfidence.HIGH: 3,
+            ExtractionConfidence.MEDIUM: 2,
+            ExtractionConfidence.LOW: 1,
+        }
+
+        unique_dates: dict[str, ExtractedIdentifier] = {}
+
+        for identifier in result.issue_dates:
+            normalized_value = re.sub(
+                r"[./-]",
+                "-",
+                identifier.value,
+            )
+
+            existing = unique_dates.get(normalized_value)
+
+            if existing is None:
+                unique_dates[normalized_value] = identifier
+                continue
+
+            if (
+                confidence_rank[identifier.confidence]
+                > confidence_rank[existing.confidence]
+            ):
+                unique_dates[normalized_value] = identifier
+
+        result.issue_dates = list(
+            unique_dates.values()
+        )
 
     # ==================================================================
     # Primary GO header date
@@ -541,6 +733,8 @@ class IdentifierExtractor:
         Only a bounded region after that GO number is inspected.
         This prevents dates belonging to referenced Government Orders
         later in the document from being selected.
+
+        Both textual and numeric header-date formats are supported.
 
         No date is guessed when the primary header cannot be resolved.
         """
@@ -608,30 +802,67 @@ class IdentifierExtractor:
                 go_match.end():header_end
             ]
 
+            # ------------------------------------------------------
+            # First try the textual-month header format.
+            # ------------------------------------------------------
+
             date_match = (
                 self.GO_HEADER_DATE_PATTERN.search(
                     header_text
                 )
             )
 
-            if date_match is None:
-                continue
+            if date_match is not None:
+                day = int(
+                    date_match.group("day")
+                )
+                month = date_match.group("month")
+                year = int(
+                    date_match.group("year")
+                )
 
-            day = int(
-                date_match.group("day")
-            )
+                primary_value = (
+                    f"{day:02d} "
+                    f"{month} "
+                    f"{year}"
+                )
 
-            month = date_match.group("month")
+            else:
+                # --------------------------------------------------
+                # Then try the numeric header format.
+                # --------------------------------------------------
 
-            year = int(
-                date_match.group("year")
-            )
+                numeric_date_match = (
+                    self.GO_HEADER_NUMERIC_DATE_PATTERN.search(
+                        header_text
+                    )
+                )
 
-            primary_value = (
-                f"{day:02d} "
-                f"{month} "
-                f"{year}"
-            )
+                if numeric_date_match is None:
+                    continue
+
+                day = int(
+                    numeric_date_match.group("day")
+                )
+                month = int(
+                    numeric_date_match.group("month")
+                )
+                year = int(
+                    numeric_date_match.group("year")
+                )
+
+                if not self._is_valid_date_parts(
+                    day=day,
+                    month=month,
+                    year=year,
+                ):
+                    continue
+
+                primary_value = (
+                    f"{day:02d}-"
+                    f"{month:02d}-"
+                    f"{year}"
+                )
 
             # ------------------------------------------------------
             # Upgrade the matching date to primary status.
@@ -671,11 +902,14 @@ class IdentifierExtractor:
         result: IdentifierExtractionResult,
     ) -> None:
         """
-        Match issuing departments using exact and conservative
-        fuzzy matching.
+        Match the issuing department from the Government Order header.
 
-        Fuzzy matching is performed only against phrases having
-        the same number of words as the known department name.
+        The first-page header is preferred because department names
+        later in the document may belong to recipient lists,
+        referenced orders, or other departments.
+
+        Exact header matching is used before conservative fuzzy
+        matching.
         """
 
         normalized_text = " ".join(text.split())
@@ -683,11 +917,72 @@ class IdentifierExtractor:
         if not normalized_text:
             return
 
-        text_lower = normalized_text.lower()
+        # ----------------------------------------------------------
+        # The beginning of the first page is the primary issuing
+        # department region.
+        # ----------------------------------------------------------
+
+        header_text = normalized_text[:1500]
+        header_lower = header_text.lower()
+
+        header_departments: list[str] = []
+
+        for department in self.DEPARTMENTS:
+            if department.lower() in header_lower:
+                header_departments.append(department)
 
         # ----------------------------------------------------------
-        # Exact matching.
+        # Electronics & Information Technology Department may be
+        # printed with the section marker "(C)".
+        #
+        # Example:
+        # ELECTRONICS & INFORMATION TECHNOLOGY(C)DEPARTMENT
         # ----------------------------------------------------------
+
+        itd_pattern = re.compile(
+            r"""
+            electronics
+            \s*&\s*
+            information
+            \s+technology
+            \s*\(c\)?
+            \s*department
+            """,
+            re.IGNORECASE | re.VERBOSE,
+        )
+
+        if itd_pattern.search(header_text):
+            if (
+                "Electronics & Information Technology Department"
+                not in header_departments
+            ):
+                header_departments.append(
+                    "Electronics & Information Technology Department"
+                )
+
+        # ----------------------------------------------------------
+        # If an issuing department was found in the header, do not
+        # search the rest of the document for unrelated departments.
+        # ----------------------------------------------------------
+
+        if header_departments:
+            for department in header_departments:
+                self._add_unique_identifier(
+                    collection=result.departments,
+                    identifier=ExtractedIdentifier(
+                        value=department,
+                        confidence=ExtractionConfidence.HIGH,
+                        extraction_method="HEADER_EXACT",
+                    ),
+                )
+
+            return
+
+        # ----------------------------------------------------------
+        # Fallback: exact matching within the first page.
+        # ----------------------------------------------------------
+
+        text_lower = normalized_text.lower()
 
         for department in self.DEPARTMENTS:
             if department.lower() in text_lower:
@@ -700,21 +995,21 @@ class IdentifierExtractor:
                     ),
                 )
 
+        if result.departments:
+            return
+
+        # ----------------------------------------------------------
+        # Conservative fuzzy matching fallback.
+        # ----------------------------------------------------------
+
         words = normalized_text.split()
 
         if len(words) < 2:
             return
 
-        # ----------------------------------------------------------
-        # Conservative fuzzy matching.
-        # ----------------------------------------------------------
-
         for department in self.DEPARTMENTS:
             department_words = department.split()
             word_count = len(department_words)
-
-            if department.lower() in text_lower:
-                continue
 
             if len(words) < word_count:
                 continue
@@ -1071,6 +1366,83 @@ class IdentifierExtractor:
                 for ordinal in relationship.reference_ordinals
                 if ordinal in valid_ordinals
             ]
+
+    # ==================================================================
+    # Date validation helpers
+    # ==================================================================
+
+    @staticmethod
+    def _is_valid_date_parts(
+        day: int,
+        month: int,
+        year: int,
+    ) -> bool:
+        """Validate numeric date components."""
+
+        if not 1900 <= year <= 2100:
+            return False
+
+        if not 1 <= month <= 12:
+            return False
+
+        if not 1 <= day <= 31:
+            return False
+
+        try:
+            date(
+                year=year,
+                month=month,
+                day=day,
+            )
+        except ValueError:
+            return False
+
+        return True
+
+    @classmethod
+    def _is_valid_generic_date(
+        cls,
+        value: str,
+    ) -> bool:
+        """
+        Validate a generic numeric date extracted from OCR text.
+
+        Supports:
+            DD-MM-YYYY
+            DD/MM/YYYY
+            DD.MM.YYYY
+            YYYY-MM-DD
+            YYYY/MM/DD
+            YYYY.MM.DD
+        """
+
+        parts = re.split(r"[./-]", value)
+
+        if len(parts) != 3:
+            return False
+
+        try:
+            first, second, third = (
+                int(part)
+                for part in parts
+            )
+        except ValueError:
+            return False
+
+        if len(parts[0]) == 4:
+            year = first
+            month = second
+            day = third
+        else:
+            day = first
+            month = second
+            year = third
+
+        return cls._is_valid_date_parts(
+            day=day,
+            month=month,
+            year=year,
+        )
 
     # ==================================================================
     # Normalization helpers

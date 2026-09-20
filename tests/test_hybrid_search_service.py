@@ -1,12 +1,7 @@
 """Tests for hybrid Government Order search."""
 
-from uuid import uuid4
-
 import pytest
 
-from app.models.hybrid_search import (
-    HybridSearchResponse,
-)
 from app.services.hybrid_search_service import (
     HybridSearchService,
 )
@@ -90,3 +85,90 @@ def test_go_number_pattern_does_not_match_invalid_year():
     )
 
     assert matches == []
+
+
+def test_extract_exact_go_number():
+    """Test extraction of an exact Government Order number."""
+
+    query = (
+        "G.O.(Rt) No. 114/2025/ITD"
+    )
+
+    result = (
+        HybridSearchService._extract_exact_go_number(
+            query
+        )
+    )
+
+    assert result == (
+        "G.O.(Rt) No. 114/2025/ITD"
+    )
+
+
+def test_extract_exact_go_number_lowercase():
+    """Exact GO extraction should be case insensitive."""
+
+    query = (
+        "g.o.(rt) no. 114/2025/itd"
+    )
+
+    result = (
+        HybridSearchService._extract_exact_go_number(
+            query
+        )
+    )
+
+    assert result == (
+        "G.O.(Rt) No. 114/2025/itd"
+    )
+
+
+def test_extract_exact_go_number_with_surrounding_text():
+    """GO numbers should be extracted from natural queries."""
+
+    query = (
+        "What is the status of "
+        "G.O.(Rt) No. 114/2025/ITD?"
+    )
+
+    result = (
+        HybridSearchService._extract_exact_go_number(
+            query
+        )
+    )
+
+    assert result == (
+        "G.O.(Rt) No. 114/2025/ITD"
+    )
+
+
+def test_extract_exact_go_number_returns_none_for_normal_query():
+    """Normal natural-language queries should not be treated as GO queries."""
+
+    query = (
+        "Which order discusses IT Mission?"
+    )
+
+    result = (
+        HybridSearchService._extract_exact_go_number(
+            query
+        )
+    )
+
+    assert result is None
+
+
+def test_extract_exact_go_number_returns_none_for_invalid_year():
+    """Invalid GO year formats should return None."""
+
+    query = (
+        "G.O.(Rt) No. 114/25/ITD"
+    )
+
+    result = (
+        HybridSearchService._extract_exact_go_number(
+            query
+        )
+    )
+
+    assert result is None

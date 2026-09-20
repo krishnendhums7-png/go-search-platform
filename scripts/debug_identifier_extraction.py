@@ -21,24 +21,58 @@ from app.services.identifier_extractor import (
 )
 
 
-PDF_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "raw"
-    / "G.O.(P) No.4_2026_P&ARD_16_08_03_2026.pdf"
-)
+RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
+
+
+def select_pdf() -> Path | None:
+    """Display available PDFs and let the user select one."""
+
+    pdf_files = sorted(RAW_DATA_DIR.glob("*.pdf"))
+
+    if not pdf_files:
+        print(f"No PDF files found in: {RAW_DATA_DIR}")
+        return None
+
+    print("=" * 70)
+    print("AVAILABLE GOVERNMENT ORDERS")
+    print("=" * 70)
+
+    for index, pdf_path in enumerate(pdf_files, start=1):
+        print(f"{index}. {pdf_path.name}")
+
+    print()
+
+    while True:
+        choice = input(
+            "Enter PDF number to debug: "
+        ).strip()
+
+        try:
+            selected_index = int(choice)
+        except ValueError:
+            print("Please enter a valid number.")
+            continue
+
+        if 1 <= selected_index <= len(pdf_files):
+            return pdf_files[selected_index - 1]
+
+        print(
+            f"Please enter a number between 1 and "
+            f"{len(pdf_files)}."
+        )
 
 
 def main() -> None:
-    """Extract and display identifiers from the test PDF."""
+    """Extract and display identifiers from a selected PDF."""
 
-    if not PDF_PATH.exists():
-        print(f"PDF not found: {PDF_PATH}")
+    pdf_path = select_pdf()
+
+    if pdf_path is None:
         return
 
     pages: list[ExtractedPage] = []
 
-    with fitz.open(PDF_PATH) as document:
+    with fitz.open(pdf_path) as document:
         for page_number, page in enumerate(
             document,
             start=1,
@@ -64,11 +98,12 @@ def main() -> None:
 
     result = extractor.extract(text_result)
 
+    print()
     print("=" * 70)
     print("IDENTIFIER EXTRACTION DEBUG")
     print("=" * 70)
 
-    print(f"\nPDF: {PDF_PATH.name}")
+    print(f"\nPDF: {pdf_path.name}")
     print(f"Pages: {page_count}")
 
     print("\nGO NUMBERS:")
@@ -93,6 +128,14 @@ def main() -> None:
             f"  {identifier.value}"
             f" | confidence={identifier.confidence}"
             f" | method={identifier.extraction_method}"
+        )
+
+    print("\nREFERENCES:")
+    for reference in result.references:
+        print(
+            f"  {reference.ordinal}"
+            f". {reference.go_number}"
+            f" | page={reference.page_number}"
         )
 
     print("\nRELATIONSHIPS:")

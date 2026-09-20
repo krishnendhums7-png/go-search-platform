@@ -27,3 +27,4 @@ qdrant-client
 numpy
 SQLAlchemy
 psycopg[binary]
+langgraph

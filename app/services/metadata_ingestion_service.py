@@ -57,6 +57,15 @@ class MetadataIngestionService:
             result
         )
 
+        source_go_number = (
+            self._resolve_source_go_number(result)
+        )
+
+        referenced_go_numbers = {
+            reference.go_number
+            for reference in result.references
+        }
+
         government_order_ids: list[UUID] = []
 
         # ----------------------------------------------------------
@@ -99,11 +108,19 @@ class MetadataIngestionService:
                         # source document.
                         existing.document_id = document_id
 
-                        if issue_date is not None:
+                        if (
+                            issue_date is not None
+                            and go_number == source_go_number
+                        ):
                             self._metadata_service.update_issue_date(
                                 existing.id,
                                 issue_date,
                             )
+                        elif go_number in referenced_go_numbers:
+                            # This record may have inherited the source
+                            # document date during an earlier ingestion.
+                            # Do not keep a source date on a referenced GO.
+                            existing.issue_date = None
 
                         if (
                             department is not None
@@ -117,17 +134,23 @@ class MetadataIngestionService:
 
             if existing is not None:
                 if (
-                    issue_date is not None
+                    go_number == source_go_number
+                    and issue_date is not None
                     and existing.issue_date != issue_date
                 ):
                     self._metadata_service.update_issue_date(
                         existing.id,
                         issue_date,
                     )
+                elif go_number in referenced_go_numbers:
+                    # A referenced GO is not issued by this source
+                    # document. Remove a stale inherited date if the
+                    # record still points to this source document.
+                    existing.issue_date = None
 
                 if (
                     department is not None
-                    and existing.department is None
+                    and existing.department != department
                 ):
                     existing.department = department
 
@@ -145,7 +168,11 @@ class MetadataIngestionService:
                 self._metadata_service.create_government_order(
                     document_id=document_id,
                     go_number=go_number,
-                    issue_date=issue_date,
+                    issue_date=(
+                        issue_date
+                        if go_number == source_go_number
+                        else None
+                    ),
                     department=department,
                 )
             )
@@ -221,6 +248,36 @@ class MetadataIngestionService:
         }
 
         return aliases.get(go_number)
+
+    @staticmethod
+    def _resolve_source_go_number(
+        result: IdentifierExtractionResult,
+    ) -> str | None:
+        """Resolve the source Government Order number deterministically.
+
+        The source GO is the only extracted GO that is not present
+        in the numbered reference list.
+
+        Returns:
+            Source GO number, or None when the source is ambiguous.
+        """
+
+        referenced_go_numbers = {
+            reference.go_number
+            for reference in result.references
+        }
+
+        source_candidates = [
+            identifier.value
+            for identifier in result.go_numbers
+            if identifier.value
+            not in referenced_go_numbers
+        ]
+
+        if len(source_candidates) != 1:
+            return None
+
+        return source_candidates[0]
 
     @staticmethod
     def _resolve_source_go_id(
