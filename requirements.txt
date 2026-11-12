@@ -10,7 +10,8 @@ loguru==0.7.3
 pytest==8.4.1
 httpx==0.28.1
 
-passlib[bcrypt]
+passlib==1.7.4
+bcrypt==4.0.1
 python-jose[cryptography]
 
 python-multipart==0.0.20
@@ -22,9 +23,10 @@ numpy==2.2.6
 pytesseract==0.3.13
 Pillow==11.3.0
 rapidfuzz
+
 sentence-transformers
 qdrant-client
-numpy
 SQLAlchemy
 psycopg[binary]
 langgraph
+email-validator

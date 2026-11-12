@@ -39,8 +39,8 @@ from app.services.image_preprocessor import (
 from app.services.pdf_classifier import (
     pdf_classifier,
 )
-from app.storage.mock_storage import (
-    MockStorageService,
+from app.storage.minio_storage import (
+    MinIOStorageService,
 )
 from app.models.text_extraction import TextExtractionResult
 from app.services.text_extractor import TextExtractor
@@ -541,8 +541,8 @@ class DocumentService:
 # SERVICE INSTANCE
 # =============================================================
 
-mock_storage = MockStorageService()
+minio_storage = MinIOStorageService()
 
 document_service = DocumentService(
-    storage_service=mock_storage,
+    storage_service=minio_storage,
 )

@@ -32,6 +32,7 @@ from app.agents.hybrid_search_agent import HybridSearchAgent
 from app.agents.intent_agent import IntentAgent
 from app.agents.orchestrator import GOOrchestrator
 from app.agents.status_agent import StatusAgent
+from app.config import settings
 from app.services.embedding_service import EmbeddingService
 from app.services.hybrid_search_service import (
     HybridSearchService,
@@ -42,15 +43,6 @@ from app.services.status_verification_service import (
 )
 from app.storage.relational.session import SessionFactory
 from app.storage.vector.qdrant_client import QdrantVectorStore
-
-
-# ============================================================================
-# Configuration
-# ============================================================================
-
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
-COLLECTION_NAME = "government_orders"
 
 
 # ============================================================================
@@ -92,13 +84,13 @@ def build_orchestrator(
     embedding_service = EmbeddingService()
 
     qdrant_client = QdrantClient(
-        host=QDRANT_HOST,
-        port=QDRANT_PORT,
+        host=settings.QDRANT_HOST,
+        port=settings.QDRANT_PORT,
     )
 
     vector_store = QdrantVectorStore(
         client=qdrant_client,
-        collection_name=COLLECTION_NAME,
+        collection_name=settings.QDRANT_COLLECTION_NAME,
     )
 
     # ------------------------------------------------------------------------

@@ -20,7 +20,8 @@ from app.models.identifier_extraction import (
 )
 from app.services.document_service import DocumentService
 from app.services.embedding_service import EmbeddingService
-from app.storage.mock_storage import MockStorageService
+from app.config import settings
+from app.storage.minio_storage import MinIOStorageService
 from app.storage.relational.models import (
     GovernmentOrderModel,
 )
@@ -32,9 +33,9 @@ from app.storage.vector.qdrant_client import (
 
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
-COLLECTION_NAME = "government_orders"
+QDRANT_HOST = settings.QDRANT_HOST
+QDRANT_PORT = settings.QDRANT_PORT
+COLLECTION_NAME = settings.QDRANT_COLLECTION_NAME
 
 
 def resolve_existing_document_id(
@@ -271,7 +272,7 @@ async def main() -> None:
     # Document processing service
     # ------------------------------------------------------------------
 
-    storage = MockStorageService()
+    storage = MinIOStorageService()
 
     document_service = (
         DocumentService(

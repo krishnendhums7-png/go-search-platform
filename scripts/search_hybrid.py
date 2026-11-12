@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 
-
 # ---------------------------------------------------------
 # Make the project root importable
 # ---------------------------------------------------------
@@ -16,17 +15,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from qdrant_client import QdrantClient
 
+from app.config import settings
 from app.services.embedding_service import EmbeddingService
 from app.services.hybrid_search_service import (
     HybridSearchService,
 )
 from app.storage.relational.session import SessionFactory
 from app.storage.vector.qdrant_client import QdrantVectorStore
-
-
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
-COLLECTION_NAME = "government_orders"
 
 
 def main() -> None:
@@ -53,22 +48,22 @@ def main() -> None:
     # ---------------------------------------------------------
 
     qdrant_client = QdrantClient(
-        host=QDRANT_HOST,
-        port=QDRANT_PORT,
+        host=settings.QDRANT_HOST,
+        port=settings.QDRANT_PORT,
     )
 
     vector_store = QdrantVectorStore(
         client=qdrant_client,
-        collection_name=COLLECTION_NAME,
+        collection_name=settings.QDRANT_COLLECTION_NAME,
     )
 
     collection = qdrant_client.get_collection(
-        collection_name=COLLECTION_NAME,
+        collection_name=settings.QDRANT_COLLECTION_NAME,
     )
 
     print(
         f"Qdrant collection: "
-        f"{COLLECTION_NAME}"
+        f"{settings.QDRANT_COLLECTION_NAME}"
     )
 
     print(

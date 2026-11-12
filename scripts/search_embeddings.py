@@ -10,16 +10,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.config import settings
 from app.services.embedding_service import EmbeddingService
 from app.services.semantic_search_service import (
     SemanticSearchService,
 )
 from app.storage.vector.qdrant_client import QdrantVectorStore
-
-
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
-COLLECTION_NAME = "government_orders"
 
 
 def main() -> None:
@@ -36,14 +32,18 @@ def main() -> None:
     print("Model loaded successfully.")
     print()
 
+    # ---------------------------------------------------------
+    # Connect to Qdrant using application configuration
+    # ---------------------------------------------------------
+
     qdrant_client = QdrantClient(
-        host=QDRANT_HOST,
-        port=QDRANT_PORT,
+        host=settings.QDRANT_HOST,
+        port=settings.QDRANT_PORT,
     )
 
     vector_store = QdrantVectorStore(
         client=qdrant_client,
-        collection_name=COLLECTION_NAME,
+        collection_name=settings.QDRANT_COLLECTION_NAME,
     )
 
     search_service = SemanticSearchService(
@@ -52,16 +52,24 @@ def main() -> None:
     )
 
     collection = qdrant_client.get_collection(
-        collection_name=COLLECTION_NAME,
+        collection_name=settings.QDRANT_COLLECTION_NAME,
     )
 
     print(
-        f"Qdrant collection: {COLLECTION_NAME}"
+        f"Qdrant collection: "
+        f"{settings.QDRANT_COLLECTION_NAME}"
     )
+
     print(
-        f"Vectors available: {collection.points_count}"
+        f"Vectors available: "
+        f"{collection.points_count}"
     )
+
     print()
+
+    # ---------------------------------------------------------
+    # Test multilingual queries
+    # ---------------------------------------------------------
 
     queries = [
         "Government Order about pension",
@@ -94,15 +102,19 @@ def main() -> None:
                 f"\n[{rank}] "
                 f"Score: {result.score:.4f}"
             )
+
             print(
                 f"Document: {result.document_id}"
             )
+
             print(
                 f"Page: {result.page_number}"
             )
+
             print(
                 f"Chunk: {result.chunk_id}"
             )
+
             print("Text:")
             print(result.text[:1000])
             print()

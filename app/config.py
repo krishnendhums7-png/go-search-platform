@@ -45,6 +45,10 @@ class Settings(BaseSettings):
 
     POSTGRES_DB: str = "kerala_go"
 
+    QDRANT_HOST: str = "localhost"
+    QDRANT_PORT: int = 6333
+    QDRANT_COLLECTION_NAME: str = "government_orders"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

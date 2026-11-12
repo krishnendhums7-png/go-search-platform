@@ -18,7 +18,7 @@ from app.services.document_service import DocumentService
 from app.services.metadata_ingestion_service import (
     MetadataIngestionService,
 )
-from app.storage.mock_storage import MockStorageService
+from app.storage.minio_storage import MinIOStorageService
 from app.storage.relational.session import SessionFactory
 
 
@@ -28,7 +28,7 @@ RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
 async def process_documents() -> None:
     """Extract and store metadata from all real Government Orders."""
-    storage = MockStorageService()
+    storage = MinIOStorageService()
     document_service = DocumentService(storage)
 
     pdf_files = sorted(RAW_DATA_DIR.glob("*.pdf"))

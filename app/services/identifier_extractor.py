@@ -10,7 +10,6 @@ import re
 from datetime import date
 
 from rapidfuzz import fuzz
-from rapidfuzz import process
 
 from app.models.identifier_extraction import (
     ExtractionConfidence,
@@ -21,6 +20,7 @@ from app.models.identifier_extraction import (
     RelationshipType,
 )
 from app.models.text_extraction import TextExtractionResult
+from app.services.department_service import department_service
 
 
 class IdentifierExtractor:
@@ -31,26 +31,12 @@ class IdentifierExtractor:
 
     1. Regex-first extraction.
     2. OCR-tolerant normalization for matching.
-    3. RapidFuzz fallback for department matching.
-    4. Numbered Government Order reference extraction.
-    5. Deterministic relationship signal detection.
-    6. Explicit review flags for uncertain values.
+    3. Department registry resolution.
+    4. RapidFuzz fallback for department matching.
+    5. Numbered Government Order reference extraction.
+    6. Deterministic relationship signal detection.
+    7. Explicit review flags for uncertain values.
     """
-
-    DEPARTMENTS = [
-        "Finance Department",
-        "General Administration Department",
-        "Home Department",
-        "Revenue Department",
-        "Health and Family Welfare Department",
-        "Local Self Government Department",
-        "Education Department",
-        "Industries Department",
-        "Agriculture Department",
-        "Transport Department",
-        "Water Resources Department",
-        "Electronics & Information Technology Department",
-    ]
 
     # ------------------------------------------------------------------
     # Malayalam Government Order category mapping
@@ -180,6 +166,7 @@ class IdentifierExtractor:
         re.IGNORECASE | re.VERBOSE,
     )
 
+    # ------------------------------------------------------------------
     # Numeric Government Order header date.
     #
     # Examples:
@@ -294,7 +281,6 @@ class IdentifierExtractor:
             "ഭേദഗതി ചെയ്യുന്നതിന്",
             "ഭേദഗതി",
         ],
-
         RelationshipType.SUPERSEDES: [
             # English
             "in supersession of",
@@ -306,7 +292,6 @@ class IdentifierExtractor:
             "പൂർണ്ണമായി റദ്ദാക്കി",
             "പിൻവലിച്ച്",
         ],
-
         RelationshipType.CANCELS: [
             # English
             "stands cancelled",
@@ -319,7 +304,6 @@ class IdentifierExtractor:
             "റദ്ദാക്കിയിരിക്കുന്നു",
             "റദ്ദാക്കി",
         ],
-
         RelationshipType.READ_AS: [
             # English
             "shall be read as",
@@ -377,12 +361,6 @@ class IdentifierExtractor:
 
         # ----------------------------------------------------------
         # Extract the issuing department from the first page header.
-        # ----------------------------------------------------------
-        #
-        # Department names later in a Government Order can belong to
-        # recipient lists or referenced departments. The first page is
-        # therefore treated as the authoritative issuing-department
-        # region.
         # ----------------------------------------------------------
 
         if text_result.pages:
@@ -511,15 +489,14 @@ class IdentifierExtractor:
         result: IdentifierExtractionResult,
     ) -> None:
         """
-        Extract Government Order header dates and generic dates.
+        Extract Government Order header dates.
 
-        Header dates are initially marked as GO_HEADER.
+        Only dates explicitly associated with a ``Dated`` header are
+        considered issue-date candidates.
 
-        Numeric header dates such as ``23-02-2026`` are supported
-        separately so they are not confused with ordinary dates.
-
-        The primary GO header date is identified separately after
-        all pages have been processed.
+        Generic numeric dates appearing elsewhere in the document
+        are not added to ``issue_dates`` because they may belong to
+        referenced GOs, letters, financial years, or other content.
         """
 
         # ----------------------------------------------------------
@@ -564,10 +541,8 @@ class IdentifierExtractor:
             ):
                 continue
 
-            # Preserve the separator used in the source text.
-            # This keeps values such as 15.08.2024 unchanged while
-            # still allowing normalized duplicate detection later.
             matched_date = match.group(0)
+
             separator_match = re.search(
                 r"\d{1,2}([./-])\d{1,2}([./-])\d{4}",
                 matched_date,
@@ -597,124 +572,6 @@ class IdentifierExtractor:
                 ),
             )
 
-        # ----------------------------------------------------------
-        # Generic numeric dates.
-        #
-        # Ignore impossible dates and implausible OCR years.
-        # ----------------------------------------------------------
-
-        for match in self.DATE_PATTERN.finditer(text):
-            value = match.group(0)
-
-            if not self._is_valid_generic_date(value):
-                continue
-
-            self._add_unique_identifier(
-                collection=result.issue_dates,
-                identifier=ExtractedIdentifier(
-                    value=value,
-                    confidence=ExtractionConfidence.MEDIUM,
-                    extraction_method="REGEX",
-                ),
-            )
-
-        # ----------------------------------------------------------
-        # Remove duplicate dates represented with different
-        # separators. Header dates have higher confidence than
-        # generic regex dates, so the existing high-confidence
-        # extraction is retained.
-        # ----------------------------------------------------------
-
-        self._deduplicate_dates(result)
-
-    @staticmethod
-    def _deduplicate_dates(
-        result: IdentifierExtractionResult,
-    ) -> None:
-        """Remove duplicate dates that use different separators.
-
-        For example, ``15-08-2024`` and ``15.08.2024`` represent
-        the same date. When multiple extraction methods find the
-        same date, the highest-confidence identifier is retained.
-
-        The order of ``result.issue_dates`` is preserved.
-        """
-
-        confidence_rank = {
-            ExtractionConfidence.HIGH: 3,
-            ExtractionConfidence.MEDIUM: 2,
-            ExtractionConfidence.LOW: 1,
-        }
-
-        unique_dates: dict[str, ExtractedIdentifier] = {}
-        ordered_keys: list[str] = []
-
-        for identifier in result.issue_dates:
-            normalized = IdentifierExtractor._normalize_date_value(
-                identifier.value,
-            )
-
-            existing = unique_dates.get(normalized)
-
-            if existing is None:
-                unique_dates[normalized] = identifier
-                ordered_keys.append(normalized)
-                continue
-
-            if (
-                confidence_rank[identifier.confidence]
-                > confidence_rank[existing.confidence]
-            ):
-                unique_dates[normalized] = identifier
-
-        result.issue_dates = [
-            unique_dates[key]
-            for key in ordered_keys
-        ]
-
-    @staticmethod
-    def _normalize_date_value(value: str) -> str:
-        """Normalize numeric date separators for duplicate detection."""
-
-        return value.replace("/", "-").replace(".", "-")
-
-        # ----------------------------------------------------------
-        # Remove duplicate dates represented with different separators.
-        # Keep the highest-confidence extraction while preserving its
-        # original formatting.
-        # ----------------------------------------------------------
-
-        confidence_rank = {
-            ExtractionConfidence.HIGH: 3,
-            ExtractionConfidence.MEDIUM: 2,
-            ExtractionConfidence.LOW: 1,
-        }
-
-        unique_dates: dict[str, ExtractedIdentifier] = {}
-
-        for identifier in result.issue_dates:
-            normalized_value = re.sub(
-                r"[./-]",
-                "-",
-                identifier.value,
-            )
-
-            existing = unique_dates.get(normalized_value)
-
-            if existing is None:
-                unique_dates[normalized_value] = identifier
-                continue
-
-            if (
-                confidence_rank[identifier.confidence]
-                > confidence_rank[existing.confidence]
-            ):
-                unique_dates[normalized_value] = identifier
-
-        result.issue_dates = list(
-            unique_dates.values()
-        )
-
     # ==================================================================
     # Primary GO header date
     # ==================================================================
@@ -732,7 +589,7 @@ class IdentifierExtractor:
 
         Only a bounded region after that GO number is inspected.
         This prevents dates belonging to referenced Government Orders
-        later in the document from being selected.
+        from being selected as the primary GO's issue date.
 
         Both textual and numeric header-date formats are supported.
 
@@ -816,7 +673,9 @@ class IdentifierExtractor:
                 day = int(
                     date_match.group("day")
                 )
+
                 month = date_match.group("month")
+
                 year = int(
                     date_match.group("year")
                 )
@@ -844,9 +703,11 @@ class IdentifierExtractor:
                 day = int(
                     numeric_date_match.group("day")
                 )
+
                 month = int(
                     numeric_date_match.group("month")
                 )
+
                 year = int(
                     numeric_date_match.group("year")
                 )
@@ -858,37 +719,65 @@ class IdentifierExtractor:
                 ):
                     continue
 
+                matched_date = numeric_date_match.group(0)
+
+                separator_match = re.search(
+                    r"\d{1,2}([./-])\d{1,2}([./-])\d{4}",
+                    matched_date,
+                )
+
+                if separator_match is not None:
+                    first_separator = separator_match.group(1)
+                    second_separator = separator_match.group(2)
+                else:
+                    first_separator = "-"
+                    second_separator = "-"
+
                 primary_value = (
-                    f"{day:02d}-"
-                    f"{month:02d}-"
+                    f"{day:02d}"
+                    f"{first_separator}"
+                    f"{month:02d}"
+                    f"{second_separator}"
                     f"{year}"
                 )
 
             # ------------------------------------------------------
-            # Upgrade the matching date to primary status.
+            # Keep ONLY the primary issue date.
             # ------------------------------------------------------
 
-            for identifier in result.issue_dates:
-                if identifier.value == primary_value:
-                    identifier.confidence = (
-                        ExtractionConfidence.HIGH
-                    )
-                    identifier.extraction_method = (
-                        "GO_HEADER_PRIMARY"
-                    )
-                    return
-
-            # ------------------------------------------------------
-            # If it was not already extracted, add it.
-            # ------------------------------------------------------
-
-            result.issue_dates.append(
-                ExtractedIdentifier(
-                    value=primary_value,
-                    confidence=ExtractionConfidence.HIGH,
-                    extraction_method="GO_HEADER_PRIMARY",
+            normalized_primary = (
+                self._normalize_date_value(
+                    primary_value
                 )
             )
+
+            matching_dates = [
+                identifier
+                for identifier in result.issue_dates
+                if self._normalize_date_value(
+                    identifier.value
+                ) == normalized_primary
+            ]
+
+            result.issue_dates = matching_dates
+
+            if result.issue_dates:
+                result.issue_dates[0].confidence = (
+                    ExtractionConfidence.HIGH
+                )
+
+                result.issue_dates[0].extraction_method = (
+                    "GO_HEADER_PRIMARY"
+                )
+
+            else:
+                result.issue_dates.append(
+                    ExtractedIdentifier(
+                        value=primary_value,
+                        confidence=ExtractionConfidence.HIGH,
+                        extraction_method="GO_HEADER_PRIMARY",
+                    )
+                )
 
             return
 
@@ -902,14 +791,17 @@ class IdentifierExtractor:
         result: IdentifierExtractionResult,
     ) -> None:
         """
-        Match the issuing department from the Government Order header.
+        Extract the issuing department.
 
-        The first-page header is preferred because department names
-        later in the document may belong to recipient lists,
-        referenced orders, or other departments.
+        Detection priority:
 
-        Exact header matching is used before conservative fuzzy
-        matching.
+        1. Department code from the primary GO number.
+        2. Known department names or aliases from the first-page header.
+        3. Conservative fuzzy matching against the department registry.
+        4. Preserve unknown department codes rather than guessing.
+
+        Department definitions are maintained outside this extractor
+        in ``data/config/departments.json``.
         """
 
         normalized_text = " ".join(text.split())
@@ -918,88 +810,172 @@ class IdentifierExtractor:
             return
 
         # ----------------------------------------------------------
-        # The beginning of the first page is the primary issuing
-        # department region.
+        # 1. Try the primary English GO number.
+        # ----------------------------------------------------------
+
+        english_match = (
+            self.ENGLISH_GO_NUMBER_PATTERN.search(
+                normalized_text
+            )
+        )
+
+        if english_match is not None:
+            department_code = self._clean_department(
+                english_match.group("department")
+            )
+
+            if department_code:
+                canonical_department = (
+                    department_service.resolve(
+                        department_code
+                    )
+                )
+
+                if canonical_department is not None:
+                    department_value = canonical_department
+                    extraction_method = (
+                        "GO_NUMBER_RESOLVED"
+                    )
+                else:
+                    # Do not guess unknown department codes.
+                    department_value = department_code
+                    extraction_method = (
+                        "GO_NUMBER_UNKNOWN"
+                    )
+
+                self._add_unique_identifier(
+                    collection=result.departments,
+                    identifier=ExtractedIdentifier(
+                        value=department_value,
+                        confidence=ExtractionConfidence.HIGH,
+                        extraction_method=extraction_method,
+                    ),
+                )
+
+                return
+
+        # ----------------------------------------------------------
+        # 2. Try the Malayalam GO number.
+        # ----------------------------------------------------------
+
+        malayalam_match = (
+            self.MALAYALAM_GO_NUMBER_PATTERN.search(
+                normalized_text
+            )
+        )
+
+        if malayalam_match is None:
+            malayalam_match = (
+                self.MALAYALAM_GO_NUMBER_FALLBACK_PATTERN.search(
+                    normalized_text
+                )
+            )
+
+        if malayalam_match is not None:
+            department_code = self._clean_department(
+                malayalam_match.group("department")
+            )
+
+            if department_code:
+                canonical_department = (
+                    department_service.resolve(
+                        department_code
+                    )
+                )
+
+                if canonical_department is not None:
+                    department_value = canonical_department
+                    extraction_method = (
+                        "GO_NUMBER_MALAYALAM_RESOLVED"
+                    )
+                else:
+                    department_value = department_code
+                    extraction_method = (
+                        "GO_NUMBER_MALAYALAM_UNKNOWN"
+                    )
+
+                self._add_unique_identifier(
+                    collection=result.departments,
+                    identifier=ExtractedIdentifier(
+                        value=department_value,
+                        confidence=ExtractionConfidence.HIGH,
+                        extraction_method=extraction_method,
+                    ),
+                )
+
+                return
+
+        # ----------------------------------------------------------
+        # 3. Search the first-page header using the registry.
         # ----------------------------------------------------------
 
         header_text = normalized_text[:1500]
         header_lower = header_text.lower()
 
-        header_departments: list[str] = []
+        for department in department_service.departments:
+            canonical_name = department["name"]
 
-        for department in self.DEPARTMENTS:
-            if department.lower() in header_lower:
-                header_departments.append(department)
+            candidates = [
+                canonical_name,
+                *department.get("aliases", []),
+            ]
+
+            for candidate in candidates:
+                candidate_normalized = (
+                    " ".join(candidate.split()).lower()
+                )
+
+                if candidate_normalized not in header_lower:
+                    continue
+
+                self._add_unique_identifier(
+                    collection=result.departments,
+                    identifier=ExtractedIdentifier(
+                        value=canonical_name,
+                        confidence=ExtractionConfidence.HIGH,
+                        extraction_method=(
+                            "HEADER_REGISTRY"
+                        ),
+                    ),
+                )
+
+                return
 
         # ----------------------------------------------------------
-        # Electronics & Information Technology Department may be
-        # printed with the section marker "(C)".
-        #
-        # Example:
-        # ELECTRONICS & INFORMATION TECHNOLOGY(C)DEPARTMENT
+        # 4. OCR-tolerant Electronics and IT detection.
         # ----------------------------------------------------------
 
         itd_pattern = re.compile(
             r"""
             electronics
-            \s*&\s*
+            \s*(?:&|and)\s*
             information
             \s+technology
-            \s*\(c\)?
+            \s*(?:\(c\))?
             \s*department
             """,
             re.IGNORECASE | re.VERBOSE,
         )
 
         if itd_pattern.search(header_text):
-            if (
-                "Electronics & Information Technology Department"
-                not in header_departments
-            ):
-                header_departments.append(
-                    "Electronics & Information Technology Department"
-                )
+            department = department_service.resolve(
+                "ITD"
+            )
 
-        # ----------------------------------------------------------
-        # If an issuing department was found in the header, do not
-        # search the rest of the document for unrelated departments.
-        # ----------------------------------------------------------
-
-        if header_departments:
-            for department in header_departments:
+            if department is not None:
                 self._add_unique_identifier(
                     collection=result.departments,
                     identifier=ExtractedIdentifier(
                         value=department,
                         confidence=ExtractionConfidence.HIGH,
-                        extraction_method="HEADER_EXACT",
+                        extraction_method="HEADER_ITD",
                     ),
                 )
 
-            return
+                return
 
         # ----------------------------------------------------------
-        # Fallback: exact matching within the first page.
-        # ----------------------------------------------------------
-
-        text_lower = normalized_text.lower()
-
-        for department in self.DEPARTMENTS:
-            if department.lower() in text_lower:
-                self._add_unique_identifier(
-                    collection=result.departments,
-                    identifier=ExtractedIdentifier(
-                        value=department,
-                        confidence=ExtractionConfidence.HIGH,
-                        extraction_method="EXACT",
-                    ),
-                )
-
-        if result.departments:
-            return
-
-        # ----------------------------------------------------------
-        # Conservative fuzzy matching fallback.
+        # 5. Conservative fuzzy matching.
         # ----------------------------------------------------------
 
         words = normalized_text.split()
@@ -1007,58 +983,65 @@ class IdentifierExtractor:
         if len(words) < 2:
             return
 
-        for department in self.DEPARTMENTS:
-            department_words = department.split()
-            word_count = len(department_words)
+        best_department: str | None = None
+        best_score = 0.0
+        best_matched_value = ""
 
-            if len(words) < word_count:
-                continue
+        for department in department_service.departments:
+            canonical_name = department["name"]
 
-            windows: list[str] = []
+            candidates = [
+                canonical_name,
+                *department.get("aliases", []),
+            ]
 
-            for index in range(
-                len(words) - word_count + 1
-            ):
-                window = " ".join(
-                    words[
-                        index:index + word_count
-                    ]
-                )
+            for candidate in candidates:
+                candidate_words = candidate.split()
+                word_count = len(candidate_words)
 
-                windows.append(window)
+                if len(words) < word_count:
+                    continue
 
-            if not windows:
-                continue
+                for index in range(
+                    len(words) - word_count + 1
+                ):
+                    window = " ".join(
+                        words[
+                            index:index + word_count
+                        ]
+                    )
 
-            match = process.extractOne(
-                department,
-                windows,
-                scorer=fuzz.ratio,
-            )
+                    score = fuzz.ratio(
+                        candidate.lower(),
+                        window.lower(),
+                    )
 
-            if match is None:
-                continue
+                    if score > best_score:
+                        best_score = score
+                        best_department = canonical_name
+                        best_matched_value = window
 
-            matched_value, score, _ = match
+        if (
+            best_department is None
+            or best_score < self.DEPARTMENT_THRESHOLD
+        ):
+            return
 
-            if score < self.DEPARTMENT_THRESHOLD:
-                continue
+        self._add_unique_identifier(
+            collection=result.departments,
+            identifier=ExtractedIdentifier(
+                value=best_department,
+                confidence=ExtractionConfidence.MEDIUM,
+                extraction_method="FUZZY_REGISTRY",
+            ),
+        )
 
-            self._add_unique_identifier(
-                collection=result.departments,
-                identifier=ExtractedIdentifier(
-                    value=department,
-                    confidence=ExtractionConfidence.MEDIUM,
-                    extraction_method="FUZZY",
-                ),
-            )
-
-            result.review_flags.append(
-                "Department matched using conservative "
-                f"fuzzy matching: {matched_value} -> "
-                f"{department} "
-                f"(score={score:.1f})"
-            )
+        result.review_flags.append(
+            "Department matched using conservative "
+            f"fuzzy matching: {best_matched_value} -> "
+            f"{best_department} "
+            f"(score={best_score:.1f})"
+        )
 
     # ==================================================================
     # Reference extraction
@@ -1408,6 +1391,7 @@ class IdentifierExtractor:
         Validate a generic numeric date extracted from OCR text.
 
         Supports:
+
             DD-MM-YYYY
             DD/MM/YYYY
             DD.MM.YYYY
@@ -1416,7 +1400,10 @@ class IdentifierExtractor:
             YYYY.MM.DD
         """
 
-        parts = re.split(r"[./-]", value)
+        parts = re.split(
+            r"[./-]",
+            value,
+        )
 
         if len(parts) != 3:
             return False
@@ -1503,6 +1490,20 @@ class IdentifierExtractor:
         return (
             f"G.O.({category}) "
             f"No. {number}/{year}/{department}"
+        )
+
+    @staticmethod
+    def _normalize_date_value(
+        value: str,
+    ) -> str:
+        """Normalize date separators for comparison."""
+
+        return value.replace(
+            "/",
+            "-",
+        ).replace(
+            ".",
+            "-",
         )
 
     @staticmethod

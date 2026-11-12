@@ -9,6 +9,7 @@ from app.models.text_extraction import (
     TextExtractionResult,
 )
 from app.models.identifier_extraction import (
+    ExtractionConfidence,
     RelationshipType,
 )
 from app.services.identifier_extractor import (
@@ -62,6 +63,7 @@ def test_extract_date() -> None:
     extractor = IdentifierExtractor()
 
     text_result = create_text_result(
+        "G.O.(P) No. 45/2024/Fin "
         "Dated: 15.08.2024"
     )
 
@@ -74,6 +76,16 @@ def test_extract_date() -> None:
     assert (
         result.issue_dates[0].value
         == "15.08.2024"
+    )
+
+    assert (
+        result.issue_dates[0].confidence
+        == ExtractionConfidence.HIGH
+    )
+
+    assert (
+        result.issue_dates[0].extraction_method
+        == "GO_HEADER_PRIMARY"
     )
 
 
@@ -221,6 +233,7 @@ def test_extract_malayalam_relationship() -> None:
         in relationship_types
     )
 
+
 def test_extract_go_reference() -> None:
     """Numbered Government Order reference should be extracted."""
 
@@ -234,6 +247,7 @@ def test_extract_go_reference() -> None:
 
     assert len(result.references) == 1
     assert result.references[0].ordinal == 1
+
     assert (
         result.references[0].go_number
         == "G.O.(Rt) No. 114/2025/ITD"
@@ -323,3 +337,42 @@ def test_read_as_papers_is_not_relationship() -> None:
     result = extractor.extract(text_result)
 
     assert result.relationships == []
+
+
+def test_primary_go_date_excludes_referenced_dates() -> None:
+    """Only the current GO issue date should be returned."""
+
+    extractor = IdentifierExtractor()
+
+    text_result = create_text_result(
+        """
+        G.O.(Rt)No.24/2026/ITD
+        Dated,Thiruvananthapuram, 23-02-2026
+
+        Read 1 G.O (Rt) No. 114/2025/ITD dated 10/06/2025
+        2 G.O (Rt) No. 151/2025/ITD dated 02/07/2025
+        3 G.O (Rt) No. 228/2025/ITD dated 29/09/2025
+        4 G.O (Rt) No. 264/2025/ITD dated 04/12/2025
+
+        Letter No. CB/9/2024-KSITM dated 17-12-2025.
+        """
+    )
+
+    result = extractor.extract(text_result)
+
+    assert len(result.issue_dates) == 1
+
+    assert (
+        result.issue_dates[0].value
+        == "23-02-2026"
+    )
+
+    assert (
+        result.issue_dates[0].confidence
+        == ExtractionConfidence.HIGH
+    )
+
+    assert (
+        result.issue_dates[0].extraction_method
+        == "GO_HEADER_PRIMARY"
+    )
